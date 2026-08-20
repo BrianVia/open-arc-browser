@@ -1,3 +1,3 @@
 # open-arc-browser
 
-A Linux port (or copy) of Arc, the macOS web browser.
+An open linux implementation of Arc, the macOS web browser.
