@@ -578,6 +578,28 @@ describe('EngineHost reconciliation', () => {
     expect(view.webContents.closed).toBe(true)
   })
 
+  it('never hands internal views to the extension bridge (session mismatch throws there)', () => {
+    const states = stateHarness()
+    const window = new MockWindow()
+    const host = new EngineHost(window as unknown as BrowserWindow, states.get(), (command) => states.run(command), {
+      internalPageUrl: (surface) => `https://renderer.test/?surface=${surface}`
+    })
+    const insets = { sidebarWidth: 260, top: 36 }
+
+    states.run({ type: 'openTab', url: 'https://normal.test' })
+    host.sync(states.get(), insets)
+    const bridge = extensionInstances()[0]!
+    const normalContents = mock.views[0]!.webContents
+
+    states.run({ type: 'openTab', url: 'arc://extensions' })
+    host.sync(states.get(), insets)
+    const internalContents = mock.views[1]!.webContents
+
+    expect(bridge.added.map((entry) => entry.tab)).toEqual([normalContents])
+    expect(bridge.selected).not.toContain(internalContents)
+    expect(bridge.removed).not.toContain(internalContents)
+  })
+
   it('routes find-in-page to the focused pane only', async () => {
     const states = stateHarness()
     const window = new MockWindow()

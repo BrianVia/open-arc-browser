@@ -289,7 +289,12 @@ export class EngineHost {
         window: this.#window,
         emit: this.#emit,
         getState: () => this.#state,
-        viewForTab: (tabId) => this.#views.get(tabId)?.view.webContents,
+        // Internal views live on a different session; handing them to the
+        // extensions library throws (its session check) — never expose them.
+        viewForTab: (tabId) => {
+          const record = this.#views.get(tabId)
+          return record && !record.internal ? record.view.webContents : undefined
+        },
         tabIdFor: (contents) => this.#contentsToTab.get(contents.id)
       }))
       // v0.13 defaults to MV3-only installs. Combined with the extension
