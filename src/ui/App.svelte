@@ -13,6 +13,11 @@
   let urlField: HTMLInputElement
   let permissionPrompts = $state<PermissionRequestEvent[]>([])
   let rememberChoices = $state<Record<string, boolean>>({})
+  let findOpen = $state(false)
+  let findText = $state('')
+  let findOrdinal = $state(0)
+  let findTotal = $state(0)
+  let findField: HTMLInputElement | undefined = $state()
 
   const activeSpace = $derived(appState?.spaces.find((space) => space.id === appState?.activeSpaceId))
   const activeTab = $derived(appState?.tabs.find((tab) => tab.id === appState?.activeTabId[appState.activeSpaceId]))
@@ -28,6 +33,10 @@
   })
 
   $effect(() => {
+    if (findOpen) findField?.focus()
+  })
+
+  $effect(() => {
     window.browser.command({ type: 'setInsets', sidebarWidth: 260, top: 36 })
     const unsubscribeState = window.browser.subscribe((next) => { appState = next })
     const unsubscribePermissions = window.browser.onPermissionRequest((event) => {
@@ -39,9 +48,21 @@
         delete rememberChoices[event.id]
       }
     })
+    const unsubscribeFind = window.browser.onFindEvent((event) => {
+      if (event.type === 'toggle') {
+        findOpen = !findOpen
+        findText = ''
+        findOrdinal = 0
+        findTotal = 0
+      } else {
+        findOrdinal = event.activeMatchOrdinal
+        findTotal = event.matches
+      }
+    })
     return () => {
       unsubscribeState()
       unsubscribePermissions()
+      unsubscribeFind()
     }
   })
 
@@ -106,6 +127,18 @@
     permissionPrompts = permissionPrompts.filter((item) => item.id !== prompt.id)
     delete rememberChoices[prompt.id]
   }
+
+  function runFind(findNext: boolean, forward = true): void {
+    window.browser.sendFindQuery({ type: 'search', text: findText, forward, findNext })
+  }
+
+  function closeFind(): void {
+    findOpen = false
+    findText = ''
+    findOrdinal = 0
+    findTotal = 0
+    window.browser.sendFindQuery({ type: 'close' })
+  }
 </script>
 
 <WindowShell />
@@ -130,6 +163,23 @@
     <span aria-hidden="true">⌕</span>
     <input bind:this={urlField} bind:value={urlInput} aria-label="URL or search" placeholder="Search or enter URL" />
   </form>
+
+  {#if findOpen}
+    <form class="find" onsubmit={(event) => event.preventDefault()}>
+      <input
+        bind:this={findField}
+        bind:value={findText}
+        aria-label="Find in page"
+        placeholder="Find in page"
+        oninput={() => runFind(true)}
+        onkeydown={(event) => {
+          if (event.key === 'Enter') { event.preventDefault(); runFind(false, !event.shiftKey) }
+          else if (event.key === 'Escape') closeFind()
+        }}
+      />
+      <span class="find-count">{findTotal > 0 ? `${findOrdinal}/${findTotal}` : ''}</span>
+    </form>
+  {/if}
 
   <button class="new-tab" onclick={() => { openingNewTab = true; urlInput = ''; urlField.focus() }}><span>＋</span> New Tab</button>
 
@@ -218,6 +268,12 @@
   }
   .url span { color: var(--muted); font-size: 16px; }
   .url input, .space-form input { min-width: 0; width: 100%; border: 0; outline: 0; background: transparent; }
+  .find {
+    height: 30px; display: flex; align-items: center; gap: 7px; margin: -4px 2px 10px;
+    padding: 0 10px; border-radius: 15px; background: var(--surface-strong); border: 1px solid var(--line);
+  }
+  .find input { min-width: 0; width: 100%; border: 0; outline: 0; background: transparent; font-size: 12px; }
+  .find-count { color: var(--muted); font-size: 11px; white-space: nowrap; }
   .permission {
     display: flex; flex-direction: column; gap: 8px; margin: 0 2px 10px;
     padding: 10px 11px; border-radius: 12px; background: var(--surface-strong); border: 1px solid var(--line);

@@ -6,6 +6,7 @@ export interface AcceleratorDependencies {
   dispatch(command: BrowserCommand): void
   toggleCommandBar(intent: CommandBarIntent): void
   reloadFocused(hard: boolean): void
+  toggleFindBar(): void
 }
 
 export class AcceleratorController {
@@ -60,6 +61,10 @@ export class AcceleratorController {
   reload(hard: boolean): void {
     this.#dependencies.reloadFocused(hard)
   }
+
+  toggleFindBar(): void {
+    this.#dependencies.toggleFindBar()
+  }
 }
 
 export function installApplicationMenu(actions: AcceleratorController): void {
@@ -87,7 +92,9 @@ export function installApplicationMenu(actions: AcceleratorController): void {
         { label: 'Toggle Split View', accelerator: 'Ctrl+D', click: () => actions.toggleSplit() },
         { type: 'separator' },
         { label: 'Reload', accelerator: 'Ctrl+R', click: () => actions.reload(false) },
-        { label: 'Hard Reload', accelerator: 'Ctrl+Shift+R', click: () => actions.reload(true) }
+        { label: 'Hard Reload', accelerator: 'Ctrl+Shift+R', click: () => actions.reload(true) },
+        { type: 'separator' },
+        { label: 'Find in Page', accelerator: 'Ctrl+F', click: () => actions.toggleFindBar() }
       ]
     },
     { label: 'Spaces', submenu: spaceItems }

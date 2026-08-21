@@ -1,5 +1,5 @@
 import { BrowserWindow, ipcMain, shell } from 'electron'
-import { IPC_CHANNELS, browserCommandSchema, commandBarRequestSchema, ipcCommandSchema, permissionDecisionSchema, type AppState, type PermissionDecision } from '../shared'
+import { IPC_CHANNELS, browserCommandSchema, commandBarRequestSchema, findQuerySchema, ipcCommandSchema, permissionDecisionSchema, type AppState, type FindQuery, type PermissionDecision } from '../shared'
 import type { BrowserState } from './state/store'
 
 export interface IpcWindows {
@@ -12,7 +12,8 @@ export function wireIpc(
   state: BrowserState,
   onInsets: (insets: { sidebarWidth: number; top: number }) => void,
   hideCommandBar: () => void,
-  onPermissionDecision: (decision: PermissionDecision) => void
+  onPermissionDecision: (decision: PermissionDecision) => void,
+  onFindQuery: (query: FindQuery) => void
 ): () => void {
   const onCommand = (event: Electron.IpcMainEvent, raw: unknown): void => {
     const fromShell = event.sender === windows.shell.webContents
@@ -64,6 +65,12 @@ export function wireIpc(
   }
   ipcMain.on(IPC_CHANNELS.permissionDecision, onPermissionDecisionEvent)
 
+  const onFindQueryEvent = (event: Electron.IpcMainEvent, raw: unknown): void => {
+    if (event.sender !== windows.shell.webContents) return
+    onFindQuery(findQuerySchema.parse(raw))
+  }
+  ipcMain.on(IPC_CHANNELS.findQuery, onFindQueryEvent)
+
   windows.shell.webContents.once('did-finish-load', () => sendState(windows.shell, state.snapshot))
   windows.commandBar.webContents.once('did-finish-load', () => sendState(windows.commandBar, state.snapshot))
   return () => {
@@ -71,5 +78,6 @@ export function wireIpc(
     ipcMain.removeListener(IPC_CHANNELS.command, onCommand)
     ipcMain.removeListener(IPC_CHANNELS.commandBarRequest, onCommandBarRequest)
     ipcMain.removeListener(IPC_CHANNELS.permissionDecision, onPermissionDecisionEvent)
+    ipcMain.removeListener(IPC_CHANNELS.findQuery, onFindQueryEvent)
   }
 }

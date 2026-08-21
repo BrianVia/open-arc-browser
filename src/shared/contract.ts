@@ -123,6 +123,15 @@ export const permissionRequestEventSchema = z.discriminatedUnion('type', [
 ])
 export const permissionDecisionSchema = z.object({ id, allow: z.boolean(), remember: z.boolean() })
 
+export const findEventSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('toggle') }),
+  z.object({ type: z.literal('matches'), activeMatchOrdinal: z.number().int().min(0), matches: z.number().int().min(0) })
+])
+export const findQuerySchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('search'), text: z.string(), forward: z.boolean(), findNext: z.boolean() }),
+  z.object({ type: z.literal('close') })
+])
+
 export type Profile = z.infer<typeof profileSchema>
 export type Split = z.infer<typeof splitSchema>
 export type Space = z.infer<typeof spaceSchema>
@@ -139,6 +148,8 @@ export type CommandBarRequest = z.infer<typeof commandBarRequestSchema>
 export type CommandBarEvent = z.infer<typeof commandBarEventSchema>
 export type PermissionRequestEvent = z.infer<typeof permissionRequestEventSchema>
 export type PermissionDecision = z.infer<typeof permissionDecisionSchema>
+export type FindEvent = z.infer<typeof findEventSchema>
+export type FindQuery = z.infer<typeof findQuerySchema>
 
 export const IPC_CHANNELS = {
   command: 'command',
@@ -146,7 +157,9 @@ export const IPC_CHANNELS = {
   commandBarRequest: 'commandbar:request',
   commandBarEvent: 'commandbar:event',
   permissionRequest: 'permission:request',
-  permissionDecision: 'permission:decision'
+  permissionDecision: 'permission:decision',
+  findEvent: 'find:event',
+  findQuery: 'find:query'
 } as const
 
 export interface BrowserApi {
@@ -156,4 +169,6 @@ export interface BrowserApi {
   onCommandBarEvent(listener: (event: CommandBarEvent) => void): () => void
   onPermissionRequest(listener: (event: PermissionRequestEvent) => void): () => void
   answerPermission(decision: PermissionDecision): void
+  onFindEvent(listener: (event: FindEvent) => void): () => void
+  sendFindQuery(query: FindQuery): void
 }

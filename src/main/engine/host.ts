@@ -1,9 +1,10 @@
-import { BrowserWindow, WebContentsView, app, session, type DownloadItem, type Rectangle, type Session, type WebContents } from 'electron'
+import { BrowserWindow, Menu, WebContentsView, app, clipboard, session, type DownloadItem, type MenuItemConstructorOptions, type Rectangle, type Session, type WebContents } from 'electron'
 import { basename, join } from 'node:path'
 import { nanoid } from 'nanoid'
-import { IPC_CHANNELS, permissionRequestEventSchema, type AppState, type BrowserCommand, type PermissionRequestEvent, type PermissionType, type Tab } from '../../shared'
+import { IPC_CHANNELS, findEventSchema, permissionRequestEventSchema, type AppState, type BrowserCommand, type FindEvent, type PermissionRequestEvent, type PermissionType, type Tab } from '../../shared'
 import { findRememberedPermission } from '../state/transitions'
 import { wirePageEvents } from './events'
+import { buildPageContextMenu, type ContextMenuParams } from './context-menu'
 
 export interface ViewInsets { sidebarWidth: number; top: number }
 
@@ -46,6 +47,8 @@ export class EngineHost {
   readonly #sessions = new Map<string, Session>()
   readonly #lastProgressAt = new Map<string, number>()
   readonly #pendingPermissions = new Map<string, PendingPermission>()
+  #findOpen = false
+  #findContentsId: number | undefined
   #state: AppState
 
   constructor(window: BrowserWindow, initialState: AppState, emit: (command: BrowserCommand) => void, dependencies: EngineDependencies = {}) {
@@ -92,12 +95,69 @@ export class EngineHost {
   }
 
   reloadFocused(hard = false): void {
-    const space = this.#state.spaces.find((item) => item.id === this.#state.activeSpaceId)
-    const tabId = space?.split?.panes[space.split.focused] ?? this.#state.activeTabId[this.#state.activeSpaceId]
-    const contents = tabId ? this.#views.get(tabId)?.view.webContents : undefined
-    if (!contents || contents.isDestroyed()) return
+    const contents = this.#focusedContents()
+    if (!contents) return
     if (hard) contents.reloadIgnoringCache()
     else contents.reload()
+  }
+
+  toggleFindBar(): void {
+    this.#findOpen = !this.#findOpen
+    this.#sendFindEvent({ type: 'toggle' })
+    if (!this.#findOpen) this.#endFindSession()
+  }
+
+  findInPage(text: string, options: { forward?: boolean; findNext?: boolean } = {}): void {
+    const contents = this.#focusedContents()
+    if (!contents) return
+    if (!text.trim()) {
+      contents.stopFindInPage('clearSelection')
+      return
+    }
+    this.#findContentsId = contents.id
+    contents.findInPage(text, { forward: options.forward ?? true, findNext: options.findNext ?? false })
+  }
+
+  closeFind(): void {
+    if (!this.#findOpen) return
+    this.#findOpen = false
+    this.#endFindSession()
+  }
+
+  #focusedContents(): WebContents | undefined {
+    const space = this.#state.spaces.find((item) => item.id === this.#state.activeSpaceId)
+    const tabId = space?.split?.panes[space.split.focused] ?? this.#state.activeTabId[this.#state.activeSpaceId]
+    const record = tabId ? this.#views.get(tabId) : undefined
+    const contents = record?.view.webContents
+    return contents && !contents.isDestroyed() ? contents : undefined
+  }
+
+  #endFindSession(): void {
+    this.#findContentsId = undefined
+    const contents = this.#focusedContents()
+    if (!contents) return
+    contents.stopFindInPage('clearSelection')
+    contents.focus()
+  }
+
+  #sendFindEvent(event: FindEvent): void {
+    const payload = findEventSchema.parse(event)
+    const contents = this.#window.webContents
+    if (!contents || contents.isDestroyed()) return
+    contents.send(IPC_CHANNELS.findEvent, payload)
+  }
+
+  #wireContextMenu(contents: WebContents, tabId: string): void {
+    contents.on('context-menu', (_event, params: ContextMenuParams) => {
+      const tab = this.#state.tabs.find((item) => item.id === tabId)
+      const template = buildPageContextMenu(contents, params, {
+        copyText: (text) => clipboard.writeText(text),
+        openLinkInNewTab: (url) => {
+          if (tab) this.#emit({ type: 'openTab', url, spaceId: tab.spaceId })
+        }
+      })
+      Menu.buildFromTemplate(template as MenuItemConstructorOptions[]).popup({ window: this.#window })
+    })
   }
 
   #create(tab: Tab): ViewRecord {
@@ -120,6 +180,11 @@ export class EngineHost {
       emit: this.#emit
     }, () => this.#destroy(record))
     this.#wirePopupPolicy(view.webContents, tab.id)
+    this.#wireContextMenu(view.webContents, tab.id)
+    view.webContents.on('found-in-page', (_event, result) => {
+      if (!this.#findOpen || this.#findContentsId !== view.webContents.id) return
+      this.#sendFindEvent({ type: 'matches', activeMatchOrdinal: result.activeMatchOrdinal, matches: result.matches })
+    })
     if (tab.nav.entries.length) {
       void view.webContents.navigationHistory.restore({ entries: tab.nav.entries, index: tab.nav.index })
     } else {

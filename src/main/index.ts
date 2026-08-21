@@ -37,12 +37,16 @@ async function createApplication(): Promise<void> {
   teardownIpc = wireIpc({ shell: window, commandBar: commandBar.window }, browserState, (nextInsets) => {
     insets = nextInsets
     engine?.sync(browserState?.snapshot ?? initial, insets)
-  }, () => commandBar?.hide(), (decision) => engine?.answerPermission(decision.id, decision.allow, decision.remember))
+  }, () => commandBar?.hide(), (decision) => engine?.answerPermission(decision.id, decision.allow, decision.remember), (query) => {
+    if (query.type === 'close') engine?.closeFind()
+    else engine?.findInPage(query.text, { forward: query.forward, findNext: query.findNext })
+  })
   const accelerators = new AcceleratorController({
     snapshot: () => browserState?.snapshot ?? initial,
     dispatch: (command) => browserState?.dispatch(command),
     toggleCommandBar: (intent) => commandBar?.toggle(intent),
-    reloadFocused: (hard) => engine?.reloadFocused(hard)
+    reloadFocused: (hard) => engine?.reloadFocused(hard),
+    toggleFindBar: () => engine?.toggleFindBar()
   })
   installApplicationMenu(accelerators)
   browserState.subscribe((state) => engine?.sync(state, insets))

@@ -1,10 +1,30 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { BrowserWindow, Rectangle } from 'electron'
+import { clipboard, Menu, type BrowserWindow, type MenuItemConstructorOptions, type Rectangle } from 'electron'
 import type { AppState, BrowserCommand } from '../src/shared'
 import { createDefaultState, transition, type TransitionDependencies } from '../src/main/state/transitions'
 
 interface MockViewRecord {
-  webContents: { id: number; closed: boolean; currentUrl: string; reloadCount: number; hardReloadCount: number; getURL(): string; loadURL(url: string): Promise<void>; isDestroyed(): boolean }
+  webContents: {
+    id: number
+    closed: boolean
+    currentUrl: string
+    reloadCount: number
+    hardReloadCount: number
+    goBackCount: number
+    goForwardCount: number
+    canGoBack: boolean
+    canGoForward: boolean
+    inspectCalls: Array<[number, number]>
+    findCalls: Array<{ text: string; options: Record<string, unknown> }>
+    stopFindCalls: string[]
+    focusCount: number
+    handlers: Map<string, Array<(...args: unknown[]) => void>>
+    getURL(): string
+    loadURL(url: string): Promise<void>
+    isDestroyed(): boolean
+    on(event: string, handler: (...args: unknown[]) => void): unknown
+    fire(event: string, ...args: unknown[]): Promise<void>
+  }
   bounds: Rectangle | undefined
 }
 
@@ -42,13 +62,30 @@ vi.mock('electron', () => {
     readonly navigationHistory = {
       restore: async ({ entries, index }: { entries: Array<{ url: string }>; index?: number }) => {
         this.currentUrl = entries[index ?? entries.length - 1]?.url ?? ''
-      }
+      },
+      canGoBack: () => this.canGoBack,
+      canGoForward: () => this.canGoForward
     }
     closed = false
     currentUrl = ''
     reloadCount = 0
     hardReloadCount = 0
-    on(): this { return this }
+    goBackCount = 0
+    goForwardCount = 0
+    canGoBack = false
+    canGoForward = false
+    inspectCalls: Array<[number, number]> = []
+    findCalls: Array<{ text: string; options: Record<string, unknown> }> = []
+    stopFindCalls: string[] = []
+    focusCount = 0
+    handlers = new Map<string, Array<(...args: unknown[]) => void>>()
+    on(event: string, handler: (...args: unknown[]) => void): this {
+      this.handlers.set(event, [...(this.handlers.get(event) ?? []), handler])
+      return this
+    }
+    async fire(event: string, ...args: unknown[]): Promise<void> {
+      for (const handler of [...(this.handlers.get(event) ?? [])]) handler(...args)
+    }
     setWindowOpenHandler(): void {}
     getURL(): string { return this.currentUrl }
     async loadURL(url: string): Promise<void> { this.currentUrl = url }
@@ -56,6 +93,15 @@ vi.mock('electron', () => {
     close(): void { this.closed = true }
     reload(): void { this.reloadCount += 1 }
     reloadIgnoringCache(): void { this.hardReloadCount += 1 }
+    goBack(): void { this.goBackCount += 1 }
+    goForward(): void { this.goForwardCount += 1 }
+    cut(): void {}
+    copy(): void {}
+    paste(): void {}
+    inspectElement(x: number, y: number): void { this.inspectCalls.push([x, y]) }
+    focus(): void { this.focusCount += 1 }
+    findInPage(text: string, options?: Record<string, unknown>): void { this.findCalls.push({ text, options: options ?? {} }) }
+    stopFindInPage(action: 'clearSelection' | 'keepSelection' | 'activateSelection'): void { this.stopFindCalls.push(action) }
   }
   class MockWebContentsView {
     readonly webContents = new MockWebContents()
@@ -67,6 +113,8 @@ vi.mock('electron', () => {
     app: { getPath: (name: string) => (name === 'downloads' ? '/downloads' : `/mock-${name}`) },
     BrowserWindow: class {},
     WebContentsView: MockWebContentsView,
+    Menu: { buildFromTemplate: vi.fn(() => ({ popup: vi.fn() })) },
+    clipboard: { writeText: vi.fn() },
     session: {
       fromPartition: (partition: string) => {
         let existing = mock.sessions.get(partition)
@@ -337,5 +385,95 @@ describe('EngineHost reconciliation', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('builds page context-menu items from params and dispatches their actions', async () => {
+    const states = stateHarness()
+    const window = new MockWindow()
+    const emitted: BrowserCommand[] = []
+    const host = new EngineHost(window as unknown as BrowserWindow, states.get(), (command) => {
+      emitted.push(command)
+      states.run(command)
+    })
+    const insets = { sidebarWidth: 260, top: 36 }
+
+    states.run({ type: 'openTab', url: 'https://menu.test' })
+    host.sync(states.get(), insets)
+    const contents = mock.views[0]!.webContents
+
+    await contents.fire('context-menu', {}, { x: 12, y: 34, linkURL: '', editFlags: {} })
+    expect(Menu.buildFromTemplate).toHaveBeenCalledTimes(1)
+    const clickItem = (template: MenuItemConstructorOptions[], label: string) => template.find((item) => item.label === label)?.click?.(undefined as never, undefined as never, undefined as never)
+    const labeled = (template: MenuItemConstructorOptions[]) => template.filter((item) => item.label).map((item) => [item.label, item.enabled])
+    const templateAt = (index: number) => vi.mocked(Menu.buildFromTemplate).mock.calls[index]![0] as MenuItemConstructorOptions[]
+
+    const plain = templateAt(0)
+    expect(labeled(plain)).toEqual([
+      ['Back', false], ['Forward', false], ['Reload', undefined],
+      ['Cut', false], ['Copy', false], ['Paste', false],
+      ['Inspect Element', undefined]
+    ])
+    clickItem(plain, 'Back')
+    clickItem(plain, 'Reload')
+    clickItem(plain, 'Inspect Element')
+    expect(contents.goBackCount).toBe(1)
+    expect(contents.reloadCount).toBe(1)
+    expect(contents.inspectCalls).toEqual([[12, 34]])
+    expect(vi.mocked(Menu.buildFromTemplate).mock.results[0]!.value.popup).toHaveBeenCalledWith({ window })
+
+    contents.canGoBack = true
+    await contents.fire('context-menu', {}, { x: 5, y: 6, linkURL: 'https://linked.test/a', editFlags: { canCut: true, canCopy: true, canPaste: true } })
+    const linked = templateAt(1)
+    expect(labeled(linked)).toEqual([
+      ['Back', true], ['Forward', false], ['Reload', undefined],
+      ['Cut', true], ['Copy', true], ['Paste', true],
+      ['Copy Link Address', undefined], ['Open Link in New Tab', undefined],
+      ['Inspect Element', undefined]
+    ])
+
+    clickItem(linked, 'Open Link in New Tab')
+    const spaceId = states.get().spaces[0]!.id
+    expect(emitted.at(-1)).toEqual({ type: 'openTab', url: 'https://linked.test/a', spaceId })
+    expect(states.get().tabs.at(-1)).toMatchObject({ url: 'https://linked.test/a', spaceId })
+    clickItem(linked, 'Copy Link Address')
+    expect(vi.mocked(clipboard.writeText)).toHaveBeenCalledWith('https://linked.test/a')
+  })
+
+  it('routes find-in-page to the focused pane only', async () => {
+    const states = stateHarness()
+    const window = new MockWindow()
+    const host = new EngineHost(window as unknown as BrowserWindow, states.get(), (command) => states.run(command))
+    const insets = { sidebarWidth: 260, top: 36 }
+
+    states.run({ type: 'openTab', url: 'https://one.test' })
+    const one = states.get().tabs[0]!
+    states.run({ type: 'openTab', url: 'https://two.test' })
+    const two = states.get().tabs[1]!
+    states.run({ type: 'setSplit', spaceId: states.get().activeSpaceId, tabIds: [one.id, two.id], focused: 1 })
+    host.sync(states.get(), insets)
+    expect(mock.views).toHaveLength(2)
+    const unfocused = mock.views[0]!.webContents
+    const focused = mock.views[1]!.webContents
+
+    host.findInPage('hello', { forward: true, findNext: true })
+    expect(focused.findCalls).toEqual([{ text: 'hello', options: { forward: true, findNext: true } }])
+    expect(unfocused.findCalls).toHaveLength(0)
+
+    host.toggleFindBar()
+    expect(window.webContents.sent.at(-1)).toEqual({ channel: 'find:event', payload: { type: 'toggle' } })
+
+    await focused.fire('found-in-page', {}, { requestId: 1, finalUpdate: true, activeMatchOrdinal: 2, matches: 7 })
+    expect(window.webContents.sent.at(-1)).toEqual({ channel: 'find:event', payload: { type: 'matches', activeMatchOrdinal: 2, matches: 7 } })
+
+    await unfocused.fire('found-in-page', {}, { requestId: 2, finalUpdate: true, activeMatchOrdinal: 1, matches: 3 })
+    expect(window.webContents.sent.at(-1)?.payload).toEqual({ type: 'matches', activeMatchOrdinal: 2, matches: 7 })
+
+    host.closeFind()
+    expect(focused.stopFindCalls).toEqual(['clearSelection'])
+    expect(focused.focusCount).toBe(1)
+    expect(unfocused.stopFindCalls).toEqual([])
+
+    host.findInPage('   ')
+    expect(focused.stopFindCalls).toEqual(['clearSelection', 'clearSelection'])
   })
 })

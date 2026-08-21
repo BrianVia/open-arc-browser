@@ -4,6 +4,8 @@ import {
   appStateSchema,
   commandBarEventSchema,
   commandBarRequestSchema,
+  findEventSchema,
+  findQuerySchema,
   ipcCommandSchema,
   permissionDecisionSchema,
   permissionRequestEventSchema,
@@ -11,6 +13,8 @@ import {
   type BrowserApi,
   type CommandBarEvent,
   type CommandBarRequest,
+  type FindEvent,
+  type FindQuery,
   type IpcCommand,
   type PermissionDecision,
   type PermissionRequestEvent
@@ -40,6 +44,14 @@ const api: BrowserApi = {
   },
   answerPermission(decision: PermissionDecision): void {
     ipcRenderer.send(IPC_CHANNELS.permissionDecision, permissionDecisionSchema.parse(decision))
+  },
+  onFindEvent(listener: (event: FindEvent) => void): () => void {
+    const handler = (_event: Electron.IpcRendererEvent, raw: unknown): void => listener(findEventSchema.parse(raw))
+    ipcRenderer.on(IPC_CHANNELS.findEvent, handler)
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.findEvent, handler)
+  },
+  sendFindQuery(query: FindQuery): void {
+    ipcRenderer.send(IPC_CHANNELS.findQuery, findQuerySchema.parse(query))
   }
 }
 
