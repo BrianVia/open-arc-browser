@@ -27,6 +27,10 @@ export function wireIpc(
     const command = ipcCommandSchema.parse(raw)
     if (command.type === 'setInsets') {
       onInsets({ sidebarWidth: command.sidebarWidth, top: command.top })
+      // The UI sends insets on every mount (including dev hot-reloads and
+      // renderer reloads), so answer with a snapshot — a freshly mounted UI
+      // otherwise stays empty until the next state change.
+      sendState(windows.shell, state.snapshot)
       return
     }
     if (command.type === 'showItemInFolder') {
