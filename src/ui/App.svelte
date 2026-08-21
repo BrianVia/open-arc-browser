@@ -170,6 +170,11 @@
 <WindowShell />
 
 <aside style:--space-color={activeSpace?.color ?? '#8b7cf6'}>
+  <form class="url" onsubmit={(event) => { event.preventDefault(); submitUrl() }}>
+    <span aria-hidden="true">⌕</span>
+    <input bind:this={urlField} bind:value={urlInput} aria-label="URL or search" placeholder="Search or enter URL" />
+  </form>
+
   {#if activeProfileId}
     <div class="browser-actions" aria-label="Extension actions">
       {#key activeProfileId}
@@ -192,11 +197,6 @@
       </div>
     {/if}
   {/each}
-
-  <form class="url" onsubmit={(event) => { event.preventDefault(); submitUrl() }}>
-    <span aria-hidden="true">⌕</span>
-    <input bind:this={urlField} bind:value={urlInput} aria-label="URL or search" placeholder="Search or enter URL" />
-  </form>
 
   {#if findOpen}
     <form class="find" onsubmit={(event) => event.preventDefault()}>
@@ -326,7 +326,7 @@
     height: 34px; display: flex; align-items: center; gap: 7px; margin: 0 2px 10px;
     padding: 0 10px; border-radius: 17px; background: var(--surface-strong); border: 1px solid var(--line);
   }
-  .browser-actions { min-height: 0; display: flex; justify-content: flex-end; margin: -3px 3px 6px; }
+  .browser-actions { min-height: 0; display: flex; justify-content: flex-end; margin: 0 3px 6px; }
   browser-action-list { --browser-action-hover-bg: var(--hover); }
   browser-action-list::part(action) { width: 26px; height: 26px; border-radius: 7px; }
   .url span { color: var(--muted); font-size: 16px; }
