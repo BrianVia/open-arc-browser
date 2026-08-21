@@ -3,6 +3,7 @@ import { basename, join } from 'node:path'
 import { nanoid } from 'nanoid'
 import { IPC_CHANNELS, findEventSchema, permissionRequestEventSchema, type AppState, type BrowserCommand, type FindEvent, type PermissionRequestEvent, type PermissionType, type Tab } from '../../shared'
 import { findRememberedPermission } from '../state/transitions'
+import { ExtensionBridge, extensionsRootFor, loadUnpackedExtensions } from './extension-bridge'
 import { wirePageEvents } from './events'
 import { buildPageContextMenu, type ContextMenuParams } from './context-menu'
 
@@ -15,6 +16,7 @@ export interface EngineDependencies {
 interface ViewRecord {
   view: WebContentsView
   tabId: string
+  profileId: string
   attached: boolean
   requestedUrl: string
 }
@@ -45,6 +47,7 @@ export class EngineHost {
   readonly #views = new Map<string, ViewRecord>()
   readonly #contentsToTab = new Map<number, string>()
   readonly #sessions = new Map<string, Session>()
+  readonly #bridges = new Map<string, ExtensionBridge>()
   readonly #lastProgressAt = new Map<string, number>()
   readonly #pendingPermissions = new Map<string, PendingPermission>()
   #findOpen = false
@@ -87,6 +90,7 @@ export class EngineHost {
         void record.view.webContents.loadURL(tab.url)
       }
     })
+    for (const bridge of this.#bridges.values()) bridge.syncActiveTab(state)
   }
 
   destroy(): void {
@@ -171,9 +175,10 @@ export class EngineHost {
         contextIsolation: true
       }
     })
-    const record: ViewRecord = { view, tabId: tab.id, attached: false, requestedUrl: tab.url }
+    const record: ViewRecord = { view, tabId: tab.id, profileId: profile.id, attached: false, requestedUrl: tab.url }
     this.#views.set(tab.id, record)
     this.#contentsToTab.set(view.webContents.id, tab.id)
+    this.#bridges.get(profile.id)?.addTab(view.webContents)
     wirePageEvents(view.webContents, {
       tabFor: (contents) => this.#contentsToTab.get(contents.id),
       state: () => this.#state,
@@ -199,6 +204,15 @@ export class EngineHost {
       existing = session.fromPartition(`persist:profile-${profileId}`)
       this.#wireDownloads(existing)
       this.#wirePermissions(existing)
+      this.#bridges.set(profileId, new ExtensionBridge(existing, {
+        profileId,
+        window: this.#window,
+        emit: this.#emit,
+        getState: () => this.#state,
+        viewForTab: (tabId) => this.#views.get(tabId)?.view.webContents,
+        tabIdFor: (contents) => this.#contentsToTab.get(contents.id)
+      }))
+      void loadUnpackedExtensions(existing, extensionsRootFor(profileId))
       this.#sessions.set(profileId, existing)
     }
     return existing
@@ -348,6 +362,7 @@ export class EngineHost {
     for (const [id, pending] of this.#pendingPermissions) {
       if (pending.contentsId === record.view.webContents.id) this.#settlePermission(id, false)
     }
+    if (!record.view.webContents.isDestroyed()) this.#bridges.get(record.profileId)?.removeTab(record.view.webContents)
     this.#views.delete(record.tabId)
     this.#contentsToTab.delete(record.view.webContents.id)
     if (!record.view.webContents.isDestroyed()) record.view.webContents.close()

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { clipboard, Menu, type BrowserWindow, type MenuItemConstructorOptions, type Rectangle } from 'electron'
-import type { AppState, BrowserCommand } from '../src/shared'
+import type { AppState, BrowserCommand, Tab } from '../src/shared'
 import { createDefaultState, transition, type TransitionDependencies } from '../src/main/state/transitions'
 
 interface MockViewRecord {
@@ -43,6 +43,38 @@ interface MockDownloadItem {
 interface MockPermissionHandler {
   (contents: { id: number; getURL(): string; isDestroyed(): boolean }, permission: string, callback: (allow: boolean) => void): void
 }
+
+interface MockExtensionsInstance {
+  options: {
+    license?: string
+    session?: unknown
+    createTab?: (details: { url?: string }) => Promise<[unknown, unknown]>
+    selectTab?: (tab: unknown) => void
+    removeTab?: (tab: unknown) => void
+  }
+  added: Array<{ tab: unknown; window: unknown }>
+  removed: unknown[]
+  selected: unknown[]
+}
+
+const crx = vi.hoisted(() => ({ instances: [] as unknown[] }))
+const extensionInstances = (): MockExtensionsInstance[] => crx.instances as MockExtensionsInstance[]
+
+vi.mock('electron-chrome-extensions', () => ({
+  ElectronChromeExtensions: class {
+    options: MockExtensionsInstance['options']
+    added: MockExtensionsInstance['added'] = []
+    removed: unknown[] = []
+    selected: unknown[] = []
+    constructor(options: MockExtensionsInstance['options']) {
+      this.options = options
+      crx.instances.push(this)
+    }
+    addTab(tab: unknown, window: unknown): void { this.added.push({ tab, window }) }
+    removeTab(tab: unknown): void { this.removed.push(tab) }
+    selectTab(tab: unknown): void { this.selected.push(tab) }
+  }
+}))
 
 const mock = vi.hoisted(() => ({
   views: [] as MockViewRecord[],
@@ -171,6 +203,7 @@ beforeEach(() => {
   mock.views.length = 0
   mock.nextContentsId = 0
   mock.sessions.clear()
+  crx.instances.length = 0
 })
 
 function makeDownloadItem(url: string, filename: string, totalBytes: number): MockDownloadItem {
@@ -475,5 +508,79 @@ describe('EngineHost reconciliation', () => {
 
     host.findInPage('   ')
     expect(focused.stopFindCalls).toEqual(['clearSelection', 'clearSelection'])
+  })
+})
+
+describe('EngineHost extension-bridge wiring', () => {
+  const profiles = [
+    { id: 'pa', name: 'A', color: '#111111' },
+    { id: 'pb', name: 'B', color: '#222222' }
+  ]
+  const spaces = [
+    { id: 'sa', profileId: 'pa', name: 'A Space', color: '#111111', split: null },
+    { id: 'sb', profileId: 'pb', name: 'B Space', color: '#222222', split: null }
+  ]
+  const makeTab = (id: string, spaceId: string): Tab => ({
+    id, spaceId, url: `https://${id}.test`, title: id, faviconUrl: '', pinned: false, muted: false,
+    lastActiveAt: 1, nav: { entries: [], index: -1 }
+  })
+
+  function twoProfileState(): AppState {
+    return {
+      profiles,
+      spaces,
+      tabs: [makeTab('a1', 'sa'), makeTab('b1', 'sb')],
+      downloads: [],
+      permissions: [],
+      activeSpaceId: 'sb',
+      activeTabId: { sa: 'a1', sb: 'b1' }
+    }
+  }
+
+  it('registers views per profile bridge, reports scoped active tabs, and unregisters on destroy', () => {
+    const states = stateHarness()
+    const window = new MockWindow()
+    const host = new EngineHost(window as unknown as BrowserWindow, twoProfileState(), () => {})
+    const insets = { sidebarWidth: 260, top: 36 }
+
+    host.sync(twoProfileState(), insets)
+    expect(extensionInstances()).toHaveLength(1)
+    expect(extensionInstances()[0]?.added.map((entry) => entry.tab)).toEqual([mock.views[0]?.webContents])
+    expect(extensionInstances()[0]?.selected).toEqual([mock.views[0]?.webContents])
+
+    host.sync({ ...twoProfileState(), activeSpaceId: 'sa', activeTabId: { ...twoProfileState().activeTabId, sb: null } }, insets)
+    expect(mock.views).toHaveLength(2)
+    expect(extensionInstances()).toHaveLength(2)
+    const bridgeB = extensionInstances()[0]!
+    const bridgeA = extensionInstances()[1]!
+    expect(bridgeA.added.map((entry) => entry.tab)).toEqual([mock.views[1]?.webContents])
+    expect(bridgeA.selected).toEqual([mock.views[1]?.webContents])
+    expect(bridgeB.selected).toEqual([mock.views[0]?.webContents])
+
+    states.run({ type: 'closeTab', tabId: 'a1' })
+    host.sync(states.get(), insets)
+    expect(bridgeA.removed).toEqual([mock.views[1]?.webContents])
+    expect(mock.views[1]?.webContents.closed).toBe(true)
+  })
+
+  it('routes extension createTab through BrowserState into the profile\'s active space and resolves the engine view', async () => {
+    const window = new MockWindow()
+    const insets = { sidebarWidth: 260, top: 36 }
+    const dependencies: TransitionDependencies = { createId: (() => { let n = 0; return () => `ext-${++n}` })(), now: () => 1000 }
+    let state = twoProfileState()
+    const host = new EngineHost(window as unknown as BrowserWindow, state, (command) => {
+      state = transition(state, command, dependencies)
+      host.sync(state, insets)
+    })
+    host.sync(state, insets)
+
+    const [contents] = await extensionInstances()[0]!.options.createTab!({ url: 'https://extension.test/page' })
+    const created = state.tabs.find((tab) => tab.url === 'https://extension.test/page')
+    expect(created?.spaceId).toBe('sb')
+    expect(contents).toBe(mock.views.at(-1)?.webContents)
+
+    const before = state.tabs.length
+    await extensionInstances()[0]!.options.removeTab!(contents)
+    expect(state.tabs).toHaveLength(before - 1)
   })
 })
