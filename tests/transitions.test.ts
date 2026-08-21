@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { AppState, BrowserCommand } from '../src/shared'
+import type { AppState, BrowserCommand, Download } from '../src/shared'
 import { createDefaultState, transition, type TransitionDependencies } from '../src/main/state/transitions'
 
 function harness(): { state: AppState; run: (command: BrowserCommand) => AppState } {
@@ -113,5 +113,43 @@ describe('BrowserState transitions', () => {
     const tab = app.state.tabs[0]!
     app.run({ type: 'tabEvent', tabId: tab.id, event: { url: 'https://two.test/', title: 'Two', navEntry: { url: 'https://two.test/', title: 'Two' } } })
     expect(app.state.tabs[0]).toMatchObject({ id: tab.id, url: 'https://two.test/', title: 'Two', nav: { index: 1 } })
+  })
+
+  it('adds download records and updates them in place', () => {
+    const app = harness()
+    expect(app.state.downloads).toEqual([])
+    const download: Download = {
+      id: 'dl-1', tabId: null, url: 'https://files.test/a.zip', filename: 'a.zip',
+      savePath: '/downloads/a.zip', state: 'progressing', receivedBytes: 0, totalBytes: 100, startedAt: 1001
+    }
+    app.run({ type: 'downloadEvent', download })
+    expect(app.state.downloads).toEqual([download])
+
+    app.run({ type: 'downloadEvent', download: { ...download, receivedBytes: 50 } })
+    expect(app.state.downloads).toHaveLength(1)
+    expect(app.state.downloads[0]).toMatchObject({ id: 'dl-1', state: 'progressing', receivedBytes: 50 })
+
+    app.run({ type: 'downloadEvent', download: { ...download, state: 'done', receivedBytes: 100 } })
+    expect(app.state.downloads[0]).toMatchObject({ id: 'dl-1', state: 'done', receivedBytes: 100 })
+  })
+
+  it('keeps at most 50 most-recent download records', () => {
+    const app = harness()
+    for (let index = 0; index < 55; index += 1) {
+      app.run({
+        type: 'downloadEvent',
+        download: {
+          id: `dl-${index}`, tabId: null, url: `https://files.test/${index}`, filename: `${index}.bin`,
+          savePath: `/downloads/${index}.bin`, state: 'done', receivedBytes: 1, totalBytes: 1, startedAt: 1000 + index
+        }
+      })
+    }
+    expect(app.state.downloads).toHaveLength(50)
+    expect(app.state.downloads.map((item) => item.id)).toEqual(Array.from({ length: 50 }, (_, offset) => `dl-${54 - offset}`))
+
+    const oldest = app.state.downloads.at(-1)!
+    app.run({ type: 'downloadEvent', download: { ...oldest, receivedBytes: 2 } })
+    expect(app.state.downloads).toHaveLength(50)
+    expect(app.state.downloads[0]?.id).toBe(oldest.id)
   })
 })

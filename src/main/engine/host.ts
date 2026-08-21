@@ -1,8 +1,14 @@
-import { BrowserWindow, WebContentsView, session, type Rectangle, type WebContents } from 'electron'
+import { BrowserWindow, WebContentsView, app, session, type DownloadItem, type Rectangle, type Session, type WebContents } from 'electron'
+import { basename, join } from 'node:path'
+import { nanoid } from 'nanoid'
 import type { AppState, BrowserCommand, Tab } from '../../shared'
 import { wirePageEvents } from './events'
 
 export interface ViewInsets { sidebarWidth: number; top: number }
+
+export interface EngineDependencies {
+  createId?: () => string
+}
 
 interface ViewRecord {
   view: WebContentsView
@@ -11,17 +17,23 @@ interface ViewRecord {
   requestedUrl: string
 }
 
+const PROGRESS_INTERVAL_MS = 500
+
 export class EngineHost {
   readonly #window: BrowserWindow
   readonly #emit: (command: BrowserCommand) => void
+  readonly #createId: () => string
   readonly #views = new Map<string, ViewRecord>()
   readonly #contentsToTab = new Map<number, string>()
+  readonly #sessions = new Map<string, Session>()
+  readonly #lastProgressAt = new Map<string, number>()
   #state: AppState
 
-  constructor(window: BrowserWindow, initialState: AppState, emit: (command: BrowserCommand) => void) {
+  constructor(window: BrowserWindow, initialState: AppState, emit: (command: BrowserCommand) => void, dependencies: EngineDependencies = {}) {
     this.#window = window
     this.#state = initialState
     this.#emit = emit
+    this.#createId = dependencies.createId ?? nanoid
   }
 
   sync(state: AppState, insets: ViewInsets): void {
@@ -74,7 +86,7 @@ export class EngineHost {
     if (!profile) throw new Error(`Cannot create a view for tab ${tab.id}: profile is missing`)
     const view = new WebContentsView({
       webPreferences: {
-        session: session.fromPartition(`persist:profile-${profile.id}`),
+        session: this.#sessionFor(profile.id),
         sandbox: true,
         contextIsolation: true
       }
@@ -94,6 +106,51 @@ export class EngineHost {
       void view.webContents.loadURL(tab.url)
     }
     return record
+  }
+
+  #sessionFor(profileId: string): Session {
+    let existing = this.#sessions.get(profileId)
+    if (!existing) {
+      existing = session.fromPartition(`persist:profile-${profileId}`)
+      this.#wireDownloads(existing)
+      this.#sessions.set(profileId, existing)
+    }
+    return existing
+  }
+
+  #wireDownloads(profileSession: Session): void {
+    profileSession.on('will-download', (_event, item, contents) => {
+      const id = this.#createId()
+      const filename = basename(item.getFilename())
+      const savePath = join(app.getPath('downloads'), filename)
+      item.setSavePath(savePath)
+      const tabId = this.#contentsToTab.get(contents.id) ?? null
+      const base = {
+        id,
+        tabId,
+        url: item.getURL(),
+        filename,
+        savePath,
+        receivedBytes: 0,
+        totalBytes: item.getTotalBytes(),
+        startedAt: Date.now()
+      }
+      this.#emit({ type: 'downloadEvent', download: { ...base, state: 'progressing' } })
+      this.#lastProgressAt.set(id, Date.now())
+      item.on('updated', (_updateEvent, updateState) => {
+        if (updateState !== 'progressing') return
+        const now = Date.now()
+        const last = this.#lastProgressAt.get(id) ?? 0
+        if (now - last < PROGRESS_INTERVAL_MS) return
+        this.#lastProgressAt.set(id, now)
+        this.#emit({ type: 'downloadEvent', download: { ...base, state: 'progressing', receivedBytes: item.getReceivedBytes(), totalBytes: item.getTotalBytes() } })
+      })
+      item.once('done', (_doneEvent, doneState) => {
+        this.#lastProgressAt.delete(id)
+        const state = doneState === 'completed' ? 'done' : doneState === 'cancelled' ? 'cancelled' : 'failed'
+        this.#emit({ type: 'downloadEvent', download: { ...base, state, receivedBytes: item.getReceivedBytes(), totalBytes: item.getTotalBytes() } })
+      })
+    })
   }
 
   #wirePopupPolicy(contents: WebContents, tabId: string): void {

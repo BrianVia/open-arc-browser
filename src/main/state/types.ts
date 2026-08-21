@@ -1,6 +1,7 @@
 export type {
   AppState,
   BrowserCommand,
+  Download,
   PersistedState,
   Profile,
   Space,

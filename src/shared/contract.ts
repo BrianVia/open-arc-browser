@@ -37,10 +37,23 @@ export const tabSchema = z.object({
   nav: navigationSchema,
   crashed: z.boolean().optional()
 })
+export const downloadStateSchema = z.enum(['progressing', 'done', 'failed', 'cancelled'])
+export const downloadSchema = z.object({
+  id,
+  tabId: id.nullable(),
+  url: z.string(),
+  filename: z.string(),
+  savePath: z.string(),
+  state: downloadStateSchema,
+  receivedBytes: z.number().int().min(0),
+  totalBytes: z.number().int().min(0),
+  startedAt: z.number()
+})
 export const appStateSchema = z.object({
   profiles: z.array(profileSchema),
   spaces: z.array(spaceSchema),
   tabs: z.array(tabSchema),
+  downloads: z.array(downloadSchema).default([]),
   activeSpaceId: id,
   activeTabId: z.record(id, id.nullable())
 })
@@ -67,13 +80,17 @@ export const browserCommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('navigate'), tabId: id, url: z.string() }),
   z.object({ type: z.literal('setSplit'), spaceId: id, tabIds: z.union([z.tuple([id]), z.tuple([id, id])]), focused: z.union([z.literal(0), z.literal(1)]) }),
   z.object({ type: z.literal('setSplitFocus'), spaceId: id, focused: z.union([z.literal(0), z.literal(1)]) }),
-  z.object({ type: z.literal('tabEvent'), tabId: id, event: tabEventSchema })
+  z.object({ type: z.literal('tabEvent'), tabId: id, event: tabEventSchema }),
+  z.object({ type: z.literal('downloadEvent'), download: downloadSchema })
 ])
 
-export const shellCommandSchema = z.object({
-  type: z.literal('windowControl'),
-  action: z.enum(['minimize', 'maximize', 'close'])
-})
+export const shellCommandSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('windowControl'),
+    action: z.enum(['minimize', 'maximize', 'close'])
+  }),
+  z.object({ type: z.literal('showItemInFolder'), path: z.string().min(1) })
+])
 export const insetCommandSchema = z.object({
   type: z.literal('setInsets'),
   sidebarWidth: z.number().int().min(0),
@@ -95,6 +112,7 @@ export type Profile = z.infer<typeof profileSchema>
 export type Split = z.infer<typeof splitSchema>
 export type Space = z.infer<typeof spaceSchema>
 export type Tab = z.infer<typeof tabSchema>
+export type Download = z.infer<typeof downloadSchema>
 export type AppState = z.infer<typeof appStateSchema>
 export type PersistedState = z.infer<typeof persistedStateSchema>
 export type BrowserCommand = z.infer<typeof browserCommandSchema>

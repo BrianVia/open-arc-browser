@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain } from 'electron'
+import { BrowserWindow, ipcMain, shell } from 'electron'
 import { IPC_CHANNELS, browserCommandSchema, commandBarRequestSchema, ipcCommandSchema, type AppState } from '../shared'
 import type { BrowserState } from './state/store'
 
@@ -24,6 +24,10 @@ export function wireIpc(
     const command = ipcCommandSchema.parse(raw)
     if (command.type === 'setInsets') {
       onInsets({ sidebarWidth: command.sidebarWidth, top: command.top })
+      return
+    }
+    if (command.type === 'showItemInFolder') {
+      shell.showItemInFolder(command.path)
       return
     }
     if (command.type === 'windowControl') {

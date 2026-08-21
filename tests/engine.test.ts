@@ -8,7 +8,27 @@ interface MockViewRecord {
   bounds: Rectangle | undefined
 }
 
-const mock = vi.hoisted(() => ({ views: [] as MockViewRecord[], nextContentsId: 0 }))
+interface MockDownloadItem {
+  savePath: string
+  getURL(): string
+  getFilename(): string
+  setSavePath(path: string): void
+  getReceivedBytes(): number
+  getTotalBytes(): number
+  on(event: string, handler: (...args: unknown[]) => void): unknown
+  once(event: string, handler: (...args: unknown[]) => void): unknown
+  fire(event: string, ...args: unknown[]): Promise<void>
+}
+
+const mock = vi.hoisted(() => ({
+  views: [] as MockViewRecord[],
+  nextContentsId: 0,
+  sessions: new Map<string, {
+    on(event: string, handler: (...args: unknown[]) => void): void
+    fire(event: string, ...args: unknown[]): Promise<void>
+    handlers: Map<string, Array<(...args: unknown[]) => void>>
+  }>()
+}))
 
 vi.mock('electron', () => {
   class MockWebContents {
@@ -38,9 +58,28 @@ vi.mock('electron', () => {
     setBounds(bounds: Rectangle): void { this.bounds = bounds }
   }
   return {
+    app: { getPath: (name: string) => (name === 'downloads' ? '/downloads' : `/mock-${name}`) },
     BrowserWindow: class {},
     WebContentsView: MockWebContentsView,
-    session: { fromPartition: (partition: string) => ({ partition }) }
+    session: {
+      fromPartition: (partition: string) => {
+        let existing = mock.sessions.get(partition)
+        if (!existing) {
+          const handlers = new Map<string, Array<(...args: unknown[]) => void>>()
+          existing = {
+            handlers,
+            on(event: string, handler: (...args: unknown[]) => void): void {
+              handlers.set(event, [...(handlers.get(event) ?? []), handler])
+            },
+            async fire(event: string, ...args: unknown[]): Promise<void> {
+              for (const handler of handlers.get(event) ?? []) handler(...args)
+            }
+          }
+          mock.sessions.set(partition, existing)
+        }
+        return existing
+      }
+    }
   }
 })
 
@@ -68,7 +107,30 @@ function stateHarness(): { get: () => AppState; run: (command: BrowserCommand) =
 beforeEach(() => {
   mock.views.length = 0
   mock.nextContentsId = 0
+  mock.sessions.clear()
 })
+
+function makeDownloadItem(url: string, filename: string, totalBytes: number): MockDownloadItem {
+  const handlers = new Map<string, Array<(...args: unknown[]) => void>>()
+  return {
+    savePath: '',
+    getURL: () => url,
+    getFilename: () => filename,
+    setSavePath(path: string) { this.savePath = path },
+    getReceivedBytes: () => 0,
+    getTotalBytes: () => totalBytes,
+    on(event: string, handler: (...args: unknown[]) => void) {
+      handlers.set(event, [...(handlers.get(event) ?? []), handler])
+      return this
+    },
+    once(event: string, handler: (...args: unknown[]) => void) {
+      return this.on(event, handler)
+    },
+    async fire(event: string, ...args: unknown[]) {
+      for (const handler of handlers.get(event) ?? []) handler(...args)
+    }
+  }
+}
 
 describe('EngineHost reconciliation', () => {
   it('is idempotent and detaches background tabs without destroying them', () => {
@@ -119,5 +181,51 @@ describe('EngineHost reconciliation', () => {
     expect(mock.views[1]?.webContents.closed).toBe(true)
     expect(mock.views[0]?.webContents.closed).toBe(false)
     expect(emitted).toEqual([])
+  })
+
+  it('flows a will-download mock into download records with throttled progress', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(1000)
+      const states = stateHarness()
+      const window = new MockWindow()
+      const emitted: BrowserCommand[] = []
+      let sequence = 0
+      const host = new EngineHost(window as unknown as BrowserWindow, states.get(), (command) => {
+        emitted.push(command)
+        states.run(command)
+      }, { createId: () => `dl-${++sequence}` })
+
+      states.run({ type: 'openTab', url: 'https://files.test' })
+      const tabId = states.get().tabs[0]!.id
+      host.sync(states.get(), { sidebarWidth: 260, top: 36 })
+
+      const item = makeDownloadItem('https://files.test/a.zip', 'a.zip', 100)
+      const profileSession = mock.sessions.get(`persist:profile-${states.get().profiles[0]!.id}`)
+      expect(profileSession).toBeDefined()
+      await profileSession!.fire('will-download', {}, item, mock.views[0]!.webContents)
+
+      expect(item.savePath).toBe('/downloads/a.zip')
+      expect(emitted).toHaveLength(1)
+      expect(states.get().downloads[0]).toMatchObject({
+        id: 'dl-1', tabId, url: 'https://files.test/a.zip', filename: 'a.zip',
+        savePath: '/downloads/a.zip', state: 'progressing', totalBytes: 100, startedAt: 1000
+      })
+
+      vi.setSystemTime(1300)
+      await item.fire('updated', {}, 'progressing')
+      expect(emitted).toHaveLength(1)
+
+      vi.setSystemTime(1600)
+      await item.fire('updated', {}, 'progressing')
+      expect(emitted).toHaveLength(2)
+      expect(states.get().downloads[0]).toMatchObject({ id: 'dl-1', state: 'progressing' })
+
+      await item.fire('done', {}, 'completed')
+      expect(emitted).toHaveLength(3)
+      expect(states.get().downloads[0]).toMatchObject({ id: 'dl-1', state: 'done' })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

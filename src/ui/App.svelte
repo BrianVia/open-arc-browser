@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { AppState, Tab } from '../shared'
+  import type { AppState, Download, Tab } from '../shared'
   import Button from './foundation/Button.svelte'
   import SidebarItem from './foundation/SidebarItem.svelte'
   import WindowShell from './foundation/WindowShell.svelte'
@@ -18,6 +18,7 @@
   const activeSplit = $derived(activeSpace?.split?.panes.length === 2 ? activeSpace.split : null)
   const pinnedTabs = $derived(visibleTabs.filter((tab) => tab.pinned))
   const regularTabs = $derived(visibleTabs.filter((tab) => !tab.pinned))
+  const visibleDownloads = $derived((appState?.downloads ?? []).filter((download) => Date.now() - download.startedAt < 86_400_000))
 
   $effect(() => {
     if (activeTab) urlInput = activeTab.url
@@ -72,6 +73,10 @@
     newSpaceName = ''
     addingSpace = false
   }
+
+  function revealDownload(download: Download): void {
+    window.browser.command({ type: 'showItemInFolder', path: download.savePath })
+  }
 </script>
 
 <WindowShell />
@@ -96,6 +101,21 @@
       {@render TabRow(tab, selectTab, closeTab, splitWith, unsplit)}
     {/each}
   </div>
+
+  {#if visibleDownloads.length}
+    <div class="downloads" aria-label="Downloads">
+      {#each visibleDownloads as download (download.id)}
+        <button class="download" title={`Show ${download.filename} in folder`} onclick={() => revealDownload(download)}>
+          <span class="download-name">{download.filename}</span>
+          {#if download.state === 'progressing'}
+            <span class="download-bar"><span class="download-fill" style:width={`${download.totalBytes > 0 ? Math.min(100, Math.round((download.receivedBytes / download.totalBytes) * 100)) : 0}%`}></span></span>
+          {:else}
+            <span class="download-state" class:failed={download.state !== 'done'}>{download.state}</span>
+          {/if}
+        </button>
+      {/each}
+    </div>
+  {/if}
 
   <footer>
     <div class="space-name">{activeSpace?.name ?? ''}</div>
@@ -171,6 +191,14 @@
   .row-action:hover { background: var(--hover); color: var(--text); }
   .split { font-size: 11px; }
   footer { padding: 8px 2px 0; border-top: 1px solid var(--line); }
+  .downloads { padding: 4px 0 2px; border-top: 1px solid var(--line); }
+  .download { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 9px; border-radius: 9px; background: transparent; text-align: left; color: var(--muted); }
+  .download:hover { color: var(--text); background: var(--hover); }
+  .download-name { min-width: 0; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+  .download-bar { flex: 0 0 48px; height: 3px; border-radius: 2px; background: var(--line); overflow: hidden; }
+  .download-fill { display: block; height: 100%; border-radius: 2px; background: var(--space-color); transition: width 0.25s ease; }
+  .download-state { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.8; }
+  .download-state.failed { color: var(--danger); }
   .space-name { margin: 0 7px 6px; color: var(--muted); font-size: 11px; }
   .spaces { display: flex; align-items: center; gap: 7px; padding: 0 4px; }
   .space-dot { width: 12px; height: 12px; padding: 0; border-radius: 50%; background: var(--dot); opacity: 0.55; outline: 0 solid color-mix(in srgb, var(--dot) 40%, transparent); outline-offset: 2px; }

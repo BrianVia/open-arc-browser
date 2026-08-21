@@ -1,4 +1,4 @@
-import type { AppState, BrowserCommand, Clock, IdFactory, Space, Tab } from './types'
+import type { AppState, BrowserCommand, Clock, Download, IdFactory, Space, Tab } from './types'
 
 export interface TransitionDependencies {
   createId: IdFactory
@@ -6,6 +6,7 @@ export interface TransitionDependencies {
 }
 
 const DEFAULT_URL = 'https://www.google.com/'
+const DOWNLOAD_LIMIT = 50
 
 export function createDefaultState(dependencies: TransitionDependencies): AppState {
   const profileId = dependencies.createId()
@@ -14,6 +15,7 @@ export function createDefaultState(dependencies: TransitionDependencies): AppSta
     profiles: [{ id: profileId, name: 'Personal', color: '#8b7cf6' }],
     spaces: [{ id: spaceId, profileId, name: 'Home', color: '#8b7cf6', split: null }],
     tabs: [],
+    downloads: [],
     activeSpaceId: spaceId,
     activeTabId: { [spaceId]: null }
   }
@@ -143,6 +145,14 @@ export function transition(state: AppState, command: BrowserCommand, dependencie
         activeSpaceId: space.id,
         activeTabId: { ...state.activeTabId, [space.id]: tabId }
       }
+    }
+    case 'downloadEvent': {
+      const incoming = command.download
+      const existing = state.downloads.find((item) => item.id === incoming.id)
+      const record: Download = existing ? { ...existing, ...incoming } : incoming
+      const others = state.downloads.filter((item) => item.id !== incoming.id)
+      const downloads = [record, ...others].slice(0, DOWNLOAD_LIMIT)
+      return { ...state, downloads }
     }
     case 'tabEvent': {
       return withUpdatedTab(state, command.tabId, (tab) => {
