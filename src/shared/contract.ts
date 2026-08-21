@@ -66,6 +66,7 @@ export const browserCommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('unpinTab'), tabId: id }),
   z.object({ type: z.literal('navigate'), tabId: id, url: z.string() }),
   z.object({ type: z.literal('setSplit'), spaceId: id, tabIds: z.union([z.tuple([id]), z.tuple([id, id])]), focused: z.union([z.literal(0), z.literal(1)]) }),
+  z.object({ type: z.literal('setSplitFocus'), spaceId: id, focused: z.union([z.literal(0), z.literal(1)]) }),
   z.object({ type: z.literal('tabEvent'), tabId: id, event: tabEventSchema })
 ])
 
@@ -80,6 +81,16 @@ export const insetCommandSchema = z.object({
 })
 export const ipcCommandSchema = z.union([browserCommandSchema, shellCommandSchema, insetCommandSchema])
 
+export const commandBarIntentSchema = z.enum(['new-tab', 'edit-current-url'])
+export const commandBarRequestSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('query') }),
+  z.object({ type: z.literal('hide') })
+])
+export const commandBarEventSchema = z.object({
+  type: z.literal('show'),
+  intent: commandBarIntentSchema
+})
+
 export type Profile = z.infer<typeof profileSchema>
 export type Split = z.infer<typeof splitSchema>
 export type Space = z.infer<typeof spaceSchema>
@@ -88,10 +99,20 @@ export type AppState = z.infer<typeof appStateSchema>
 export type PersistedState = z.infer<typeof persistedStateSchema>
 export type BrowserCommand = z.infer<typeof browserCommandSchema>
 export type IpcCommand = z.infer<typeof ipcCommandSchema>
+export type CommandBarIntent = z.infer<typeof commandBarIntentSchema>
+export type CommandBarRequest = z.infer<typeof commandBarRequestSchema>
+export type CommandBarEvent = z.infer<typeof commandBarEventSchema>
 
-export const IPC_CHANNELS = { command: 'command', state: 'state' } as const
+export const IPC_CHANNELS = {
+  command: 'command',
+  state: 'state',
+  commandBarRequest: 'commandbar:request',
+  commandBarEvent: 'commandbar:event'
+} as const
 
 export interface BrowserApi {
   command(command: IpcCommand): void
   subscribe(listener: (state: AppState) => void): () => void
+  requestCommandBar(request: CommandBarRequest): void
+  onCommandBarEvent(listener: (event: CommandBarEvent) => void): () => void
 }

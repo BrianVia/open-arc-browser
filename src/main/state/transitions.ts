@@ -124,10 +124,24 @@ export function transition(state: AppState, command: BrowserCommand, dependencie
       const space = state.spaces.find((item) => item.id === command.spaceId)
       const valid = space && command.tabIds.every((tabId) => state.tabs.some((tab) => tab.id === tabId && tab.spaceId === space.id))
       if (!valid || command.focused >= command.tabIds.length || new Set(command.tabIds).size !== command.tabIds.length) return state
+      if (space.split?.focused === command.focused && space.split.panes.length === command.tabIds.length && space.split.panes.every((tabId, index) => tabId === command.tabIds[index])) return state
       return {
         ...state,
         spaces: state.spaces.map((item) => item.id === space.id ? { ...item, split: { panes: command.tabIds, focused: command.focused } } : item),
         activeTabId: { ...state.activeTabId, [space.id]: command.tabIds[command.focused] ?? null }
+      }
+    }
+    case 'setSplitFocus': {
+      const space = state.spaces.find((item) => item.id === command.spaceId)
+      const tabId = space?.split?.panes[command.focused]
+      if (!space?.split || !tabId || space.split.focused === command.focused) return state
+      const split = { ...space.split, focused: command.focused }
+      const activated = withUpdatedTab(state, tabId, (tab) => ({ ...tab, lastActiveAt: dependencies.now() }))
+      return {
+        ...activated,
+        spaces: state.spaces.map((item) => item.id === space.id ? { ...item, split } : item),
+        activeSpaceId: space.id,
+        activeTabId: { ...state.activeTabId, [space.id]: tabId }
       }
     }
     case 'tabEvent': {

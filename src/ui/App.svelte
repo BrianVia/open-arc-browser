@@ -15,6 +15,7 @@
   const activeSpace = $derived(appState?.spaces.find((space) => space.id === appState?.activeSpaceId))
   const activeTab = $derived(appState?.tabs.find((tab) => tab.id === appState?.activeTabId[appState.activeSpaceId]))
   const visibleTabs = $derived((appState?.tabs.filter((tab) => tab.spaceId === appState?.activeSpaceId) ?? []).slice().reverse().sort((a, b) => b.lastActiveAt - a.lastActiveAt))
+  const activeSplit = $derived(activeSpace?.split?.panes.length === 2 ? activeSpace.split : null)
   const pinnedTabs = $derived(visibleTabs.filter((tab) => tab.pinned))
   const regularTabs = $derived(visibleTabs.filter((tab) => !tab.pinned))
 
@@ -39,12 +40,28 @@
   function selectTab(tab: Tab): void {
     openingNewTab = false
     if (tab.crashed) window.browser.command({ type: 'navigate', tabId: tab.id, url: tab.url })
-    window.browser.command({ type: 'setActiveTab', tabId: tab.id })
+    const pane = activeSplit?.panes.indexOf(tab.id) ?? -1
+    if (pane >= 0 && activeSpace) window.browser.command({ type: 'setSplitFocus', spaceId: activeSpace.id, focused: pane as 0 | 1 })
+    else window.browser.command({ type: 'setActiveTab', tabId: tab.id })
   }
 
   function closeTab(event: MouseEvent, tabId: string): void {
     event.stopPropagation()
     window.browser.command({ type: 'closeTab', tabId })
+  }
+
+  function splitWith(event: MouseEvent, tabId: string): void {
+    event.stopPropagation()
+    if (!activeSpace || !activeTab || activeSplit || tabId === activeTab.id) return
+    window.browser.command({ type: 'setSplit', spaceId: activeSpace.id, tabIds: [activeTab.id, tabId], focused: 0 })
+  }
+
+  function unsplit(event: MouseEvent): void {
+    event.stopPropagation()
+    if (!activeSpace || !activeSplit) return
+    const focusedTabId = activeSplit.panes[activeSplit.focused]
+    if (!focusedTabId) return
+    window.browser.command({ type: 'setSplit', spaceId: activeSpace.id, tabIds: [focusedTabId], focused: 0 })
   }
 
   function createSpace(): void {
@@ -71,12 +88,12 @@
     {#if pinnedTabs.length}
       <div class="section-label">Pinned</div>
       {#each pinnedTabs as tab (tab.id)}
-        {@render TabRow(tab, tab.id === activeTab?.id, selectTab, closeTab)}
+        {@render TabRow(tab, selectTab, closeTab, splitWith, unsplit)}
       {/each}
       <div class="divider"></div>
     {/if}
     {#each regularTabs as tab (tab.id)}
-      {@render TabRow(tab, tab.id === activeTab?.id, selectTab, closeTab)}
+      {@render TabRow(tab, selectTab, closeTab, splitWith, unsplit)}
     {/each}
   </div>
 
@@ -97,18 +114,28 @@
 </aside>
 
 <main>
-  {#if appState && !activeTab}
+  {#if appState && visibleTabs.length === 0}
     <div class="empty"><span>⌁</span><p>This space is ready for a new tab.</p></div>
   {/if}
 </main>
 
-{#snippet TabRow(tab: Tab, active: boolean, selectTab: (tab: Tab) => void, closeTab: (event: MouseEvent, tabId: string) => void)}
-  <SidebarItem {active} onclick={() => selectTab(tab)} onauxclick={(event) => event.button === 1 && closeTab(event, tab.id)}>
+{#snippet TabRow(tab: Tab, selectTab: (tab: Tab) => void, closeTab: (event: MouseEvent, tabId: string) => void, splitWith: (event: MouseEvent, tabId: string) => void, unsplit: (event: MouseEvent) => void)}
+  {@const splitIndex = activeSplit?.panes.indexOf(tab.id) ?? -1}
+  {@const active = splitIndex >= 0 ? splitIndex === activeSplit?.focused : tab.id === activeTab?.id}
+  {@const secondary = splitIndex >= 0 && splitIndex !== activeSplit?.focused}
+  <SidebarItem {active} {secondary} onclick={() => selectTab(tab)} onauxclick={(event) => event.button === 1 && closeTab(event, tab.id)}>
     <span class="favicon">
       {#if tab.faviconUrl}<img src={tab.faviconUrl} alt="" />{:else}{tab.crashed ? '!' : '◌'}{/if}
     </span>
     <span class:crashed={tab.crashed} class="tab-title">{tab.crashed ? `Reload ${tab.title}` : tab.title}</span>
-    <button class="close" aria-label={`Close ${tab.title}`} onclick={(event) => closeTab(event, tab.id)}>×</button>
+    {#if secondary}
+      <button class="row-action unsplit" title="Exit split view" aria-label="Exit split view" onclick={unsplit}>×</button>
+    {:else}
+      {#if !activeSplit && tab.id !== activeTab?.id}
+        <button class="row-action split" title={`Split with ${tab.title}`} aria-label={`Split with ${tab.title}`} onclick={(event) => splitWith(event, tab.id)}>◫</button>
+      {/if}
+      <button class="row-action close" aria-label={`Close ${tab.title}`} onclick={(event) => closeTab(event, tab.id)}>×</button>
+    {/if}
   </SidebarItem>
 {/snippet}
 
@@ -139,9 +166,10 @@
   .favicon img { width: 16px; height: 16px; object-fit: contain; }
   .tab-title { min-width: 0; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .tab-title.crashed { color: var(--danger); }
-  .close { width: 20px; height: 20px; padding: 0; border-radius: 6px; background: transparent; color: var(--muted); opacity: 0; }
-  :global([role='button']:hover) .close, .close:focus-visible { opacity: 1; }
-  .close:hover { background: var(--hover); color: var(--text); }
+  .row-action { width: 20px; height: 20px; padding: 0; border-radius: 6px; background: transparent; color: var(--muted); opacity: 0; }
+  :global([role='button']:hover) .row-action, .row-action:focus-visible, .unsplit { opacity: 1; }
+  .row-action:hover { background: var(--hover); color: var(--text); }
+  .split { font-size: 11px; }
   footer { padding: 8px 2px 0; border-top: 1px solid var(--line); }
   .space-name { margin: 0 7px 6px; color: var(--muted); font-size: 11px; }
   .spaces { display: flex; align-items: center; gap: 7px; padding: 0 4px; }

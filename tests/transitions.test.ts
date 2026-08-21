@@ -72,6 +72,25 @@ describe('BrowserState transitions', () => {
     expect(app.run({ type: 'setSplit', spaceId: before.activeSpaceId, tabIds: ['missing'], focused: 0 })).toBe(before)
   })
 
+  it('keeps repeated split commands idempotent and switches split focus', () => {
+    const app = harness()
+    const spaceId = app.state.activeSpaceId
+    app.run({ type: 'openTab', url: 'https://one.test' })
+    const one = app.state.tabs.at(-1)!
+    app.run({ type: 'openTab', url: 'https://two.test' })
+    const two = app.state.tabs.at(-1)!
+    app.run({ type: 'setSplit', spaceId, tabIds: [one.id, two.id], focused: 0 })
+    const splitState = app.state
+    expect(app.run({ type: 'setSplit', spaceId, tabIds: [one.id, two.id], focused: 0 })).toBe(splitState)
+
+    app.run({ type: 'setSplitFocus', spaceId, focused: 1 })
+    expect(app.state.spaces[0]?.split?.focused).toBe(1)
+    expect(app.state.activeTabId[spaceId]).toBe(two.id)
+    const focusedState = app.state
+    expect(app.run({ type: 'setSplitFocus', spaceId, focused: 1 })).toBe(focusedState)
+    expect(app.run({ type: 'setSplitFocus', spaceId, focused: 0 }).activeTabId[spaceId]).toBe(one.id)
+  })
+
   it('treats every command for an unknown tab as a no-op', () => {
     const commands: BrowserCommand[] = [
       { type: 'closeTab', tabId: 'unknown' },

@@ -4,7 +4,7 @@ import type { AppState, BrowserCommand } from '../src/shared'
 import { createDefaultState, transition, type TransitionDependencies } from '../src/main/state/transitions'
 
 interface MockViewRecord {
-  webContents: { closed: boolean; currentUrl: string }
+  webContents: { closed: boolean; currentUrl: string; reloadCount: number; hardReloadCount: number }
   bounds: Rectangle | undefined
 }
 
@@ -20,12 +20,16 @@ vi.mock('electron', () => {
     }
     closed = false
     currentUrl = ''
+    reloadCount = 0
+    hardReloadCount = 0
     on(): this { return this }
     setWindowOpenHandler(): void {}
     getURL(): string { return this.currentUrl }
     async loadURL(url: string): Promise<void> { this.currentUrl = url }
     isDestroyed(): boolean { return this.closed }
     close(): void { this.closed = true }
+    reload(): void { this.reloadCount += 1 }
+    reloadIgnoringCache(): void { this.hardReloadCount += 1 }
   }
   class MockWebContentsView {
     readonly webContents = new MockWebContents()
@@ -104,6 +108,11 @@ describe('EngineHost reconciliation', () => {
       { x: 260, y: 36, width: 370, height: 664 },
       { x: 630, y: 36, width: 370, height: 664 }
     ])
+    host.reloadFocused()
+    host.reloadFocused(true)
+    expect(mock.views[0]?.webContents.reloadCount).toBe(0)
+    expect(mock.views[1]?.webContents.reloadCount).toBe(1)
+    expect(mock.views[1]?.webContents.hardReloadCount).toBe(1)
 
     states.run({ type: 'closeTab', tabId: two.id })
     host.sync(states.get(), { sidebarWidth: 260, top: 36 })

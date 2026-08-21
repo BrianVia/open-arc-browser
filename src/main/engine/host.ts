@@ -59,6 +59,15 @@ export class EngineHost {
     for (const record of [...this.#views.values()]) this.#destroy(record)
   }
 
+  reloadFocused(hard = false): void {
+    const space = this.#state.spaces.find((item) => item.id === this.#state.activeSpaceId)
+    const tabId = space?.split?.panes[space.split.focused] ?? this.#state.activeTabId[this.#state.activeSpaceId]
+    const contents = tabId ? this.#views.get(tabId)?.view.webContents : undefined
+    if (!contents || contents.isDestroyed()) return
+    if (hard) contents.reloadIgnoringCache()
+    else contents.reload()
+  }
+
   #create(tab: Tab): ViewRecord {
     const space = this.#state.spaces.find((item) => item.id === tab.spaceId)
     const profile = space && this.#state.profiles.find((item) => item.id === space.profileId)
