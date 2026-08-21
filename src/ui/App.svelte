@@ -23,7 +23,8 @@
 
   const activeSpace = $derived(appState?.spaces.find((space) => space.id === appState?.activeSpaceId))
   const activeTab = $derived(appState?.tabs.find((tab) => tab.id === appState?.activeTabId[appState.activeSpaceId]))
-  const visibleTabs = $derived((appState?.tabs.filter((tab) => tab.spaceId === appState?.activeSpaceId) ?? []).slice().reverse().sort((a, b) => b.lastActiveAt - a.lastActiveAt))
+  // Stable order: newest tab on top, position never changes on activation.
+  const visibleTabs = $derived((appState?.tabs.filter((tab) => tab.spaceId === appState?.activeSpaceId) ?? []).slice().reverse())
   const activeSplit = $derived(activeSpace?.split?.panes.length === 2 ? activeSpace.split : null)
   const pinnedTabs = $derived(visibleTabs.filter((tab) => tab.pinned))
   const regularTabs = $derived(visibleTabs.filter((tab) => !tab.pinned))
