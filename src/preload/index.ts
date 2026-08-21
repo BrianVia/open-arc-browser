@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import { injectBrowserAction } from 'electron-chrome-extensions/browser-action'
 import {
   IPC_CHANNELS,
   appStateSchema,
@@ -6,6 +7,8 @@ import {
   commandBarRequestSchema,
   findEventSchema,
   findQuerySchema,
+  extensionsEventSchema,
+  extensionsQuerySchema,
   ipcCommandSchema,
   permissionDecisionSchema,
   permissionRequestEventSchema,
@@ -15,10 +18,16 @@ import {
   type CommandBarRequest,
   type FindEvent,
   type FindQuery,
+  type ExtensionsEvent,
+  type ExtensionsQuery,
   type IpcCommand,
   type PermissionDecision,
   type PermissionRequestEvent
 } from '../shared'
+
+// The bundled preload lets the library install its context-isolated custom
+// element without exposing Node or disabling the renderer sandbox.
+injectBrowserAction()
 
 const api: BrowserApi = {
   command(command: IpcCommand): void {
@@ -52,6 +61,14 @@ const api: BrowserApi = {
   },
   sendFindQuery(query: FindQuery): void {
     ipcRenderer.send(IPC_CHANNELS.findQuery, findQuerySchema.parse(query))
+  },
+  onExtensionsEvent(listener: (event: ExtensionsEvent) => void): () => void {
+    const handler = (_event: Electron.IpcRendererEvent, raw: unknown): void => listener(extensionsEventSchema.parse(raw))
+    ipcRenderer.on(IPC_CHANNELS.extensionsEvent, handler)
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.extensionsEvent, handler)
+  },
+  sendExtensionsQuery(query: ExtensionsQuery): void {
+    ipcRenderer.send(IPC_CHANNELS.extensionsQuery, extensionsQuerySchema.parse(query))
   }
 }
 

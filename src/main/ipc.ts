@@ -1,5 +1,5 @@
 import { BrowserWindow, ipcMain, shell, type WebContents } from 'electron'
-import { IPC_CHANNELS, browserCommandSchema, commandBarRequestSchema, findQuerySchema, ipcCommandSchema, permissionDecisionSchema, type AppState, type FindQuery, type PermissionDecision } from '../shared'
+import { IPC_CHANNELS, browserCommandSchema, commandBarRequestSchema, extensionsEventSchema, extensionsQuerySchema, findQuerySchema, ipcCommandSchema, permissionDecisionSchema, type AppState, type ExtensionsEvent, type ExtensionsQuery, type FindQuery, type PermissionDecision } from '../shared'
 import type { BrowserState } from './state/store'
 
 export interface IpcWindows {
@@ -13,7 +13,8 @@ export function wireIpc(
   onInsets: (insets: { sidebarWidth: number; top: number }) => void,
   hideCommandBar: () => void,
   onPermissionDecision: (decision: PermissionDecision) => void,
-  onFindQuery: (query: FindQuery) => void
+  onFindQuery: (query: FindQuery) => void,
+  onExtensionsQuery: (query: ExtensionsQuery) => Promise<ExtensionsEvent>
 ): () => void {
   const onCommand = (event: Electron.IpcMainEvent, raw: unknown): void => {
     const fromShell = event.sender === windows.shell.webContents
@@ -71,6 +72,15 @@ export function wireIpc(
   }
   ipcMain.on(IPC_CHANNELS.findQuery, onFindQueryEvent)
 
+  const onExtensionsQueryEvent = (event: Electron.IpcMainEvent, raw: unknown): void => {
+    if (event.sender !== windows.shell.webContents) return
+    const query = extensionsQuerySchema.parse(raw)
+    void onExtensionsQuery(query).then((result) => {
+      if (!event.sender.isDestroyed()) event.sender.send(IPC_CHANNELS.extensionsEvent, extensionsEventSchema.parse(result))
+    }).catch((error) => console.error('Extensions query failed', error))
+  }
+  ipcMain.on(IPC_CHANNELS.extensionsQuery, onExtensionsQueryEvent)
+
   windows.shell.webContents.once('did-finish-load', () => sendState(windows.shell, state.snapshot))
   windows.commandBar.webContents.once('did-finish-load', () => sendState(windows.commandBar, state.snapshot))
   return () => {
@@ -79,5 +89,6 @@ export function wireIpc(
     ipcMain.removeListener(IPC_CHANNELS.commandBarRequest, onCommandBarRequest)
     ipcMain.removeListener(IPC_CHANNELS.permissionDecision, onPermissionDecisionEvent)
     ipcMain.removeListener(IPC_CHANNELS.findQuery, onFindQueryEvent)
+    ipcMain.removeListener(IPC_CHANNELS.extensionsQuery, onExtensionsQueryEvent)
   }
 }

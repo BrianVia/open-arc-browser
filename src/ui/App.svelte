@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { AppState, Download, PermissionRequestEvent, Tab } from '../shared'
+  import type { AppState, Download, ExtensionInfo, PermissionRequestEvent, Tab } from '../shared'
   import Button from './foundation/Button.svelte'
   import SidebarItem from './foundation/SidebarItem.svelte'
   import WindowShell from './foundation/WindowShell.svelte'
@@ -18,6 +18,8 @@
   let findOrdinal = $state(0)
   let findTotal = $state(0)
   let findField: HTMLInputElement | undefined = $state()
+  let extensionsOpen = $state(false)
+  let extensions = $state<ExtensionInfo[]>([])
 
   const activeSpace = $derived(appState?.spaces.find((space) => space.id === appState?.activeSpaceId))
   const activeTab = $derived(appState?.tabs.find((tab) => tab.id === appState?.activeTabId[appState.activeSpaceId]))
@@ -26,6 +28,7 @@
   const pinnedTabs = $derived(visibleTabs.filter((tab) => tab.pinned))
   const regularTabs = $derived(visibleTabs.filter((tab) => !tab.pinned))
   const visibleDownloads = $derived((appState?.downloads ?? []).filter((download) => Date.now() - download.startedAt < 86_400_000))
+  const activeProfileId = $derived(activeSpace?.profileId)
 
   $effect(() => {
     if (activeTab) urlInput = activeTab.url
@@ -34,6 +37,13 @@
 
   $effect(() => {
     if (findOpen) findField?.focus()
+  })
+
+  $effect(() => {
+    if (extensionsOpen && activeProfileId) {
+      extensions = []
+      window.browser.sendExtensionsQuery({ type: 'list' })
+    }
   })
 
   $effect(() => {
@@ -59,10 +69,14 @@
         findTotal = event.matches
       }
     })
+    const unsubscribeExtensions = window.browser.onExtensionsEvent((event) => {
+      if (event.profileId === activeProfileId) extensions = event.extensions
+    })
     return () => {
       unsubscribeState()
       unsubscribePermissions()
       unsubscribeFind()
+      unsubscribeExtensions()
     }
   })
 
@@ -139,11 +153,31 @@
     findTotal = 0
     window.browser.sendFindQuery({ type: 'close' })
   }
+
+  function toggleExtensions(): void {
+    extensionsOpen = !extensionsOpen
+  }
+
+  function setExtensionEnabled(extension: ExtensionInfo, enabled: boolean): void {
+    window.browser.sendExtensionsQuery({ type: 'setEnabled', id: extension.id, enabled })
+  }
+
+  function uninstallExtension(extension: ExtensionInfo): void {
+    window.browser.sendExtensionsQuery({ type: 'uninstall', id: extension.id })
+  }
 </script>
 
 <WindowShell />
 
 <aside style:--space-color={activeSpace?.color ?? '#8b7cf6'}>
+  {#if activeProfileId}
+    <div class="browser-actions" aria-label="Extension actions">
+      {#key activeProfileId}
+        <browser-action-list partition={`persist:profile-${activeProfileId}`} alignment="bottom left"></browser-action-list>
+      {/key}
+    </div>
+  {/if}
+
   {#each permissionPrompts as prompt (prompt.id)}
     {#if prompt.type === 'request'}
       <div class="permission" role="alert">
@@ -212,11 +246,37 @@
   {/if}
 
   <footer>
+    {#if extensionsOpen}
+      <section class="extensions-panel" aria-label="Extensions">
+        <div class="extensions-heading">Extensions</div>
+        {#if extensions.length === 0}
+          <p class="extensions-empty">No extensions installed</p>
+        {:else}
+          {#each extensions as extension (extension.id)}
+            <div class="extension-row">
+              <span class="extension-icon">
+                {#if extension.icon}<img src={extension.icon} alt="" />{:else}{extension.name.slice(0, 1).toUpperCase()}{/if}
+              </span>
+              <span class="extension-copy">
+                <strong>{extension.name}</strong>
+                <small>v{extension.version}</small>
+              </span>
+              <label class="extension-toggle" title={`${extension.enabled ? 'Disable' : 'Enable'} ${extension.name}`}>
+                <input type="checkbox" checked={extension.enabled} onchange={(event) => setExtensionEnabled(extension, event.currentTarget.checked)} />
+                <span></span>
+              </label>
+              <button class="extension-remove" title={`Uninstall ${extension.name}`} aria-label={`Uninstall ${extension.name}`} onclick={() => uninstallExtension(extension)}>×</button>
+            </div>
+          {/each}
+        {/if}
+      </section>
+    {/if}
     <div class="space-name">{activeSpace?.name ?? ''}</div>
     <div class="spaces">
       {#each appState?.spaces ?? [] as space (space.id)}
         <button class:active={space.id === appState?.activeSpaceId} class="space-dot" style:--dot={space.color} title={space.name} aria-label={`Switch to ${space.name}`} onclick={() => window.browser.command({ type: 'setActiveSpace', spaceId: space.id })}></button>
       {/each}
+      <Button subtle title="Extensions" onclick={toggleExtensions}>🧩</Button>
       <Button subtle title="Create space" onclick={() => { addingSpace = !addingSpace }}>＋</Button>
     </div>
     {#if addingSpace}
@@ -266,6 +326,9 @@
     height: 34px; display: flex; align-items: center; gap: 7px; margin: 0 2px 10px;
     padding: 0 10px; border-radius: 17px; background: var(--surface-strong); border: 1px solid var(--line);
   }
+  .browser-actions { min-height: 0; display: flex; justify-content: flex-end; margin: -3px 3px 6px; }
+  browser-action-list { --browser-action-hover-bg: var(--hover); }
+  browser-action-list::part(action) { width: 26px; height: 26px; border-radius: 7px; }
   .url span { color: var(--muted); font-size: 16px; }
   .url input, .space-form input { min-width: 0; width: 100%; border: 0; outline: 0; background: transparent; }
   .find {
@@ -306,7 +369,30 @@
   :global([role='button']:hover) .row-action, .row-action:focus-visible, .unsplit { opacity: 1; }
   .row-action:hover { background: var(--hover); color: var(--text); }
   .split { font-size: 11px; }
-  footer { padding: 8px 2px 0; border-top: 1px solid var(--line); }
+  footer { position: relative; padding: 8px 2px 0; border-top: 1px solid var(--line); }
+  .extensions-panel {
+    position: absolute; left: 0; right: 0; bottom: calc(100% + 8px); max-height: 260px; overflow-y: auto;
+    padding: 8px; border: 1px solid var(--line); border-radius: 13px;
+    background: var(--surface-strong); box-shadow: 0 14px 36px rgba(20, 16, 28, 0.22); backdrop-filter: blur(18px);
+  }
+  .extensions-heading { padding: 2px 3px 7px; font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+  .extensions-empty { margin: 8px 3px; color: var(--muted); font-size: 12px; }
+  .extension-row { display: flex; align-items: center; gap: 8px; padding: 7px 5px; border-radius: 9px; }
+  .extension-row:hover { background: var(--hover); }
+  .extension-icon { width: 24px; height: 24px; display: grid; place-items: center; flex: 0 0 24px; border-radius: 6px; background: var(--surface); color: var(--muted); font-size: 11px; font-weight: 700; }
+  .extension-icon img { width: 18px; height: 18px; object-fit: contain; }
+  .extension-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; }
+  .extension-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; }
+  .extension-copy small { color: var(--muted); font-size: 10px; }
+  .extension-toggle { position: relative; width: 28px; height: 16px; flex: 0 0 28px; cursor: pointer; }
+  .extension-toggle input { position: absolute; opacity: 0; pointer-events: none; }
+  .extension-toggle span { display: block; width: 100%; height: 100%; border-radius: 9px; background: var(--line); transition: background 0.15s ease; }
+  .extension-toggle span::after { content: ''; display: block; width: 12px; height: 12px; margin: 2px; border-radius: 50%; background: var(--surface-strong); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25); transition: transform 0.15s ease; }
+  .extension-toggle input:checked + span { background: var(--space-color); }
+  .extension-toggle input:checked + span::after { transform: translateX(12px); }
+  .extension-toggle input:focus-visible + span { outline: 2px solid var(--space-color); outline-offset: 2px; }
+  .extension-remove { width: 22px; height: 22px; padding: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
+  .extension-remove:hover { color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
   .downloads { padding: 4px 0 2px; border-top: 1px solid var(--line); }
   .download { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 9px; border-radius: 9px; background: transparent; text-align: left; color: var(--muted); }
   .download:hover { color: var(--text); background: var(--hover); }

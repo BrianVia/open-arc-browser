@@ -132,6 +132,24 @@ export const findQuerySchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('close') })
 ])
 
+// Extensions are owned by the Chromium session, never by BrowserState; this
+// channel pair is a thin live query surface for the management panel.
+export const extensionInfoSchema = z.object({
+  id,
+  name: z.string(),
+  version: z.string(),
+  icon: z.string().nullable(),
+  enabled: z.boolean()
+})
+export const extensionsQuerySchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('list') }),
+  z.object({ type: z.literal('setEnabled'), id, enabled: z.boolean() }),
+  z.object({ type: z.literal('uninstall'), id })
+])
+export const extensionsEventSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('list'), profileId: id, extensions: z.array(extensionInfoSchema) })
+])
+
 export type Profile = z.infer<typeof profileSchema>
 export type Split = z.infer<typeof splitSchema>
 export type Space = z.infer<typeof spaceSchema>
@@ -150,6 +168,9 @@ export type PermissionRequestEvent = z.infer<typeof permissionRequestEventSchema
 export type PermissionDecision = z.infer<typeof permissionDecisionSchema>
 export type FindEvent = z.infer<typeof findEventSchema>
 export type FindQuery = z.infer<typeof findQuerySchema>
+export type ExtensionInfo = z.infer<typeof extensionInfoSchema>
+export type ExtensionsQuery = z.infer<typeof extensionsQuerySchema>
+export type ExtensionsEvent = z.infer<typeof extensionsEventSchema>
 
 export const IPC_CHANNELS = {
   command: 'command',
@@ -159,7 +180,9 @@ export const IPC_CHANNELS = {
   permissionRequest: 'permission:request',
   permissionDecision: 'permission:decision',
   findEvent: 'find:event',
-  findQuery: 'find:query'
+  findQuery: 'find:query',
+  extensionsEvent: 'extensions:event',
+  extensionsQuery: 'extensions:query'
 } as const
 
 export interface BrowserApi {
@@ -171,4 +194,6 @@ export interface BrowserApi {
   answerPermission(decision: PermissionDecision): void
   onFindEvent(listener: (event: FindEvent) => void): () => void
   sendFindQuery(query: FindQuery): void
+  onExtensionsEvent(listener: (event: ExtensionsEvent) => void): () => void
+  sendExtensionsQuery(query: ExtensionsQuery): void
 }

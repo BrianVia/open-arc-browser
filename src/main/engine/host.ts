@@ -1,9 +1,10 @@
-import { BrowserWindow, Menu, WebContentsView, app, clipboard, session, type DownloadItem, type MenuItemConstructorOptions, type Rectangle, type Session, type WebContents } from 'electron'
+import { BrowserWindow, Menu, WebContentsView, app, clipboard, nativeImage, session, type DownloadItem, type MenuItemConstructorOptions, type Rectangle, type Session, type WebContents } from 'electron'
 import { basename, join } from 'node:path'
 import { nanoid } from 'nanoid'
-import { IPC_CHANNELS, findEventSchema, permissionRequestEventSchema, type AppState, type BrowserCommand, type FindEvent, type PermissionRequestEvent, type PermissionType, type Tab } from '../../shared'
+import { installChromeWebStore, uninstallExtension } from 'electron-chrome-web-store'
+import { IPC_CHANNELS, extensionInfoSchema, extensionsEventSchema, findEventSchema, permissionRequestEventSchema, type AppState, type BrowserCommand, type ExtensionInfo, type ExtensionsEvent, type ExtensionsQuery, type FindEvent, type PermissionRequestEvent, type PermissionType, type Tab } from '../../shared'
 import { findRememberedPermission } from '../state/transitions'
-import { ExtensionBridge, extensionsRootFor, loadUnpackedExtensions } from './extension-bridge'
+import { ExtensionBridge, extensionsRootFor } from './extension-bridge'
 import { wirePageEvents } from './events'
 import { buildPageContextMenu, type ContextMenuParams } from './context-menu'
 
@@ -30,6 +31,11 @@ interface PendingPermission {
   timer: ReturnType<typeof setTimeout>
 }
 
+interface DisabledExtension {
+  path: string
+  info: ExtensionInfo
+}
+
 const PROGRESS_INTERVAL_MS = 500
 const PERMISSION_TIMEOUT_MS = 30_000
 const PROMPTED_PERMISSIONS: Record<string, PermissionType> = {
@@ -48,6 +54,8 @@ export class EngineHost {
   readonly #contentsToTab = new Map<number, string>()
   readonly #sessions = new Map<string, Session>()
   readonly #bridges = new Map<string, ExtensionBridge>()
+  readonly #extensionReady = new Map<string, Promise<void>>()
+  readonly #disabledExtensions = new Map<string, Map<string, DisabledExtension>>()
   readonly #lastProgressAt = new Map<string, number>()
   readonly #pendingPermissions = new Map<string, PendingPermission>()
   #findOpen = false
@@ -126,6 +134,45 @@ export class EngineHost {
     if (!this.#findOpen) return
     this.#findOpen = false
     this.#endFindSession()
+  }
+
+  async handleExtensionsQuery(query: ExtensionsQuery): Promise<ExtensionsEvent> {
+    const profileId = this.#activeProfileId()
+    const profileSession = this.#sessionFor(profileId)
+    await this.#extensionReady.get(profileId)
+    const disabled = this.#disabledExtensions.get(profileId) ?? new Map<string, DisabledExtension>()
+    this.#disabledExtensions.set(profileId, disabled)
+
+    if (query.type === 'setEnabled') {
+      if (query.enabled) {
+        const record = disabled.get(query.id)
+        if (record) {
+          await profileSession.loadExtension(record.path)
+          disabled.delete(query.id)
+        }
+      } else {
+        const extension = profileSession.getExtension(query.id)
+        if (extension) {
+          disabled.set(query.id, { path: extension.path, info: extensionInfo(extension, false) })
+          profileSession.removeExtension(query.id)
+        }
+      }
+    } else if (query.type === 'uninstall') {
+      await uninstallExtension(query.id, { session: profileSession, extensionsPath: extensionsRootFor(profileId) })
+      disabled.delete(query.id)
+    }
+
+    const loaded = profileSession.getAllExtensions().map((extension) => extensionInfo(extension, true))
+    for (const extension of loaded) disabled.delete(extension.id)
+    const extensions = [...loaded, ...[...disabled.values()].map((record) => record.info)]
+      .sort((left, right) => left.name.localeCompare(right.name))
+    return extensionsEventSchema.parse({ type: 'list', profileId, extensions })
+  }
+
+  #activeProfileId(): string {
+    const space = this.#state.spaces.find((item) => item.id === this.#state.activeSpaceId)
+    if (!space) throw new Error(`Active space ${this.#state.activeSpaceId} is missing`)
+    return space.profileId
   }
 
   #focusedContents(): WebContents | undefined {
@@ -212,7 +259,15 @@ export class EngineHost {
         viewForTab: (tabId) => this.#views.get(tabId)?.view.webContents,
         tabIdFor: (contents) => this.#contentsToTab.get(contents.id)
       }))
-      void loadUnpackedExtensions(existing, extensionsRootFor(profileId))
+      // v0.13 defaults to MV3-only installs. Combined with the extension
+      // bridge's partial MV3 implementation, target extensions still require
+      // the manual validation called out in SPEC-M3.
+      const ready = installChromeWebStore({
+        session: existing,
+        extensionsPath: extensionsRootFor(profileId),
+        allowUnpackedExtensions: true
+      }).catch((error) => console.error(`ExtensionBridge: failed to initialize Chrome Web Store for profile ${profileId}`, error))
+      this.#extensionReady.set(profileId, ready)
       this.#sessions.set(profileId, existing)
     }
     return existing
@@ -367,6 +422,22 @@ export class EngineHost {
     this.#contentsToTab.delete(record.view.webContents.id)
     if (!record.view.webContents.isDestroyed()) record.view.webContents.close()
   }
+}
+
+function extensionInfo(extension: Electron.Extension, enabled: boolean): ExtensionInfo {
+  const icons = Object.entries(extension.manifest?.icons ?? {})
+    .map(([size, path]) => ({ size: Number(size), path }))
+    .filter((icon): icon is { size: number; path: string } => Number.isFinite(icon.size) && typeof icon.path === 'string')
+    .sort((left, right) => right.size - left.size)
+  const iconPath = icons[0]?.path
+  const icon = iconPath ? nativeImage.createFromPath(join(extension.path, iconPath)) : undefined
+  return extensionInfoSchema.parse({
+    id: extension.id,
+    name: extension.name,
+    version: extension.version,
+    icon: icon && !icon.isEmpty() ? icon.toDataURL() : null,
+    enabled
+  })
 }
 
 function originOf(url: string): string {

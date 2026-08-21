@@ -1,4 +1,5 @@
 import { app, BrowserWindow } from 'electron'
+import { ElectronChromeExtensions } from 'electron-chrome-extensions'
 import { join } from 'node:path'
 import { nanoid } from 'nanoid'
 import { EngineHost, type ViewInsets } from './engine/host'
@@ -32,6 +33,7 @@ async function createApplication(): Promise<void> {
       nodeIntegration: false
     }
   })
+  ElectronChromeExtensions.handleCRXProtocol(window.webContents.session)
   engine = new EngineHost(window, initial, (command) => browserState?.dispatch(command))
   commandBar = new CommandBarHost(window)
   const syncEngine = (): void => {
@@ -44,6 +46,9 @@ async function createApplication(): Promise<void> {
   }, () => commandBar?.hide(), (decision) => engine?.answerPermission(decision.id, decision.allow, decision.remember), (query) => {
     if (query.type === 'close') engine?.closeFind()
     else engine?.findInPage(query.text, { forward: query.forward, findNext: query.findNext })
+  }, async (query) => {
+    if (!engine) throw new Error('Extension engine is unavailable')
+    return engine.handleExtensionsQuery(query)
   })
   const accelerators = new AcceleratorController({
     snapshot: () => browserState?.snapshot ?? initial,

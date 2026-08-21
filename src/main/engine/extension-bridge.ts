@@ -23,7 +23,7 @@ export interface ExtensionBridgeOptions {
 }
 
 interface CreateTabDetails {
-  url?: string
+  url?: string | undefined
 }
 
 export class ExtensionBridge {

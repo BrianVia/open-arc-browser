@@ -59,6 +59,15 @@ interface MockExtensionsInstance {
 
 const crx = vi.hoisted(() => ({ instances: [] as unknown[] }))
 const extensionInstances = (): MockExtensionsInstance[] => crx.instances as MockExtensionsInstance[]
+const webStore = vi.hoisted(() => ({ installs: [] as unknown[], uninstalls: [] as unknown[] }))
+
+vi.mock('electron-chrome-web-store', () => ({
+  installChromeWebStore: vi.fn(async (options: unknown) => { webStore.installs.push(options) }),
+  uninstallExtension: vi.fn(async (id: string, options: { session: MockProfileSession }) => {
+    webStore.uninstalls.push({ id, options })
+    options.session.removeExtension(id)
+  })
+}))
 
 vi.mock('electron-chrome-extensions', () => ({
   ElectronChromeExtensions: class {
@@ -76,16 +85,34 @@ vi.mock('electron-chrome-extensions', () => ({
   }
 }))
 
+interface MockExtension {
+  id: string
+  name: string
+  version: string
+  path: string
+  url: string
+  manifest: { icons?: Record<string, string> }
+}
+
+interface MockProfileSession {
+  on(event: string, handler: (...args: unknown[]) => void): void
+  fire(event: string, ...args: unknown[]): Promise<void>
+  handlers: Map<string, Array<(...args: unknown[]) => void>>
+  permissionHandler?: MockPermissionHandler
+  setPermissionRequestHandler(handler: MockPermissionHandler): void
+  extensions: Map<string, MockExtension>
+  removedExtensions: Map<string, MockExtension>
+  loadedPaths: string[]
+  getAllExtensions(): MockExtension[]
+  getExtension(id: string): MockExtension | null
+  loadExtension(path: string): Promise<MockExtension>
+  removeExtension(id: string): void
+}
+
 const mock = vi.hoisted(() => ({
   views: [] as MockViewRecord[],
   nextContentsId: 0,
-  sessions: new Map<string, {
-    on(event: string, handler: (...args: unknown[]) => void): void
-    fire(event: string, ...args: unknown[]): Promise<void>
-    handlers: Map<string, Array<(...args: unknown[]) => void>>
-    permissionHandler?: MockPermissionHandler
-    setPermissionRequestHandler(handler: MockPermissionHandler): void
-  }>()
+  sessions: new Map<string, MockProfileSession>()
 }))
 
 vi.mock('electron', () => {
@@ -147,13 +174,24 @@ vi.mock('electron', () => {
     WebContentsView: MockWebContentsView,
     Menu: { buildFromTemplate: vi.fn(() => ({ popup: vi.fn() })) },
     clipboard: { writeText: vi.fn() },
+    nativeImage: {
+      createFromPath: (path: string) => ({
+        isEmpty: () => false,
+        toDataURL: () => `data:image/mock;base64,${path}`
+      })
+    },
     session: {
       fromPartition: (partition: string) => {
         let existing = mock.sessions.get(partition)
         if (!existing) {
           const handlers = new Map<string, Array<(...args: unknown[]) => void>>()
-          const created: NonNullable<ReturnType<typeof mock.sessions.get>> = {
+          const extensions = new Map<string, MockExtension>()
+          const removedExtensions = new Map<string, MockExtension>()
+          const created: MockProfileSession = {
             handlers,
+            extensions,
+            removedExtensions,
+            loadedPaths: [],
             setPermissionRequestHandler(handler): void {
               created.permissionHandler = handler
             },
@@ -162,6 +200,22 @@ vi.mock('electron', () => {
             },
             async fire(event: string, ...args: unknown[]): Promise<void> {
               for (const handler of handlers.get(event) ?? []) handler(...args)
+            },
+            getAllExtensions: () => [...extensions.values()],
+            getExtension: (id) => extensions.get(id) ?? null,
+            async loadExtension(path) {
+              created.loadedPaths.push(path)
+              const extension = [...removedExtensions.values()].find((item) => item.path === path)
+              if (!extension) throw new Error(`Unknown extension path: ${path}`)
+              removedExtensions.delete(extension.id)
+              extensions.set(extension.id, extension)
+              return extension
+            },
+            removeExtension(id) {
+              const extension = extensions.get(id)
+              if (!extension) return
+              extensions.delete(id)
+              removedExtensions.set(id, extension)
             }
           }
           existing = created
@@ -204,6 +258,8 @@ beforeEach(() => {
   mock.nextContentsId = 0
   mock.sessions.clear()
   crx.instances.length = 0
+  webStore.installs.length = 0
+  webStore.uninstalls.length = 0
 })
 
 function makeDownloadItem(url: string, filename: string, totalBytes: number): MockDownloadItem {
@@ -561,6 +617,39 @@ describe('EngineHost extension-bridge wiring', () => {
     host.sync(states.get(), insets)
     expect(bridgeA.removed).toEqual([mock.views[1]?.webContents])
     expect(mock.views[1]?.webContents.closed).toBe(true)
+    expect(webStore.installs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ extensionsPath: '/mock-userData/extensions/pa', allowUnpackedExtensions: true }),
+      expect.objectContaining({ extensionsPath: '/mock-userData/extensions/pb', allowUnpackedExtensions: true })
+    ]))
+  })
+
+  it('round-trips the active profile extension list and enable/disable/uninstall operations', async () => {
+    const window = new MockWindow()
+    const host = new EngineHost(window as unknown as BrowserWindow, twoProfileState(), () => {})
+    host.sync(twoProfileState(), { sidebarWidth: 260, top: 36 })
+    const profileSession = mock.sessions.get('persist:profile-pb')!
+    profileSession.extensions.set('dark-reader', {
+      id: 'dark-reader', name: 'Dark Reader', version: '4.9.0', path: '/extensions/dark-reader/4.9.0',
+      url: 'chrome-extension://dark-reader/', manifest: { icons: { '128': 'icon.png' } }
+    })
+
+    await expect(host.handleExtensionsQuery({ type: 'list' })).resolves.toEqual({
+      type: 'list', profileId: 'pb',
+      extensions: [{ id: 'dark-reader', name: 'Dark Reader', version: '4.9.0', icon: 'data:image/mock;base64,/extensions/dark-reader/4.9.0/icon.png', enabled: true }]
+    })
+
+    const disabled = await host.handleExtensionsQuery({ type: 'setEnabled', id: 'dark-reader', enabled: false })
+    expect(disabled.extensions[0]).toMatchObject({ id: 'dark-reader', enabled: false })
+    expect(profileSession.getExtension('dark-reader')).toBeNull()
+
+    const enabled = await host.handleExtensionsQuery({ type: 'setEnabled', id: 'dark-reader', enabled: true })
+    expect(enabled.extensions[0]).toMatchObject({ id: 'dark-reader', enabled: true })
+    expect(profileSession.loadedPaths).toEqual(['/extensions/dark-reader/4.9.0'])
+
+    const uninstalled = await host.handleExtensionsQuery({ type: 'uninstall', id: 'dark-reader' })
+    expect(uninstalled.extensions).toEqual([])
+    expect(webStore.uninstalls).toHaveLength(1)
+    expect(webStore.uninstalls[0]).toMatchObject({ id: 'dark-reader' })
   })
 
   it('routes extension createTab through BrowserState into the profile\'s active space and resolves the engine view', async () => {
