@@ -43,7 +43,8 @@ function memoryFiles(manifestExists = false): MemoryFiles {
   }
 }
 
-const TEMP_ROOT = '/mock-temp/ublock-origin-tmp123'
+// Temp dir lives inside extensionsDir so rename() stays on one filesystem.
+const TEMP_ROOT = '/ext/.ublock-origin-tmp-tmp123'
 
 function chromiumReleaseResponse(): Response {
   return new Response(JSON.stringify({

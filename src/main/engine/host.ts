@@ -298,6 +298,16 @@ export class EngineHost {
         },
         tabIdFor: (contents) => this.#contentsToTab.get(contents.id)
       }))
+      // After the library's own preloads: fills chrome.* API gaps with inert
+      // events so extension service workers (uBOL, 1Password) boot instead
+      // of crashing on undefined.addListener.
+      if ('registerPreloadScript' in profileSession) {
+        profileSession.registerPreloadScript({
+          id: 'crx-gap-shim',
+          type: 'service-worker',
+          filePath: join(__dirname, '../preload/crx-gaps.cjs')
+        })
+      }
       // v0.13 defaults to MV3-only installs. Combined with the extension
       // bridge's partial MV3 implementation, target extensions still require
       // the manual validation called out in SPEC-M3.

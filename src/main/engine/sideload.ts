@@ -2,7 +2,6 @@ import { execFile as nodeExecFile } from 'node:child_process'
 import { promises as nodeFs } from 'node:fs'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
-import { app } from 'electron'
 
 const RELEASE_API = 'https://api.github.com/repos/gorhill/uBlock/releases/latest'
 const EXTRACTED_FOLDER = 'uBlock0.chromium'
@@ -64,14 +63,16 @@ async function provision(extensionsDir: string, dependencies: SideloadDependenci
   }
 
   const asset = await chromiumAsset(fetchImpl)
-  const tempRoot = await files.mkdtemp(join(app.getPath('temp'), `${TARGET_FOLDER}-`))
+  // Extract inside extensionsDir: /tmp is often a different filesystem and
+  // rename() across filesystems fails with EXDEV.
+  await files.mkdir(extensionsDir, { recursive: true })
+  const tempRoot = await files.mkdtemp(join(extensionsDir, `.${TARGET_FOLDER}-tmp-`))
   try {
     const zipPath = join(tempRoot, asset.name)
     const zipResponse = await fetchImpl(asset.url)
     if (!zipResponse.ok) throw new Error(`uBlock download responded ${zipResponse.status}`)
     await files.writeFile(zipPath, new Uint8Array(await zipResponse.arrayBuffer()))
     await execFile('unzip', ['-o', '-q', zipPath, '-d', tempRoot])
-    await files.mkdir(extensionsDir, { recursive: true })
     await files.rename(join(tempRoot, EXTRACTED_FOLDER), targetDir)
   } finally {
     await files.rm(tempRoot, { recursive: true, force: true })

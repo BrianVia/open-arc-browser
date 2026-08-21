@@ -10,7 +10,7 @@ export default defineConfig({
     // with sandbox: true.
     build: {
       rollupOptions: {
-        input: 'src/preload/index.ts',
+        input: { index: 'src/preload/index.ts', 'crx-gaps': 'src/preload/crx-gaps.ts' },
         output: { format: 'cjs', entryFileNames: '[name].cjs' }
       }
     }
