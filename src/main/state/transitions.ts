@@ -1,4 +1,5 @@
 import type { AppState, BrowserCommand, Clock, Download, IdFactory, PermissionRecord, PermissionType, Space, Tab } from './types'
+import { normalizeInternalUrl } from '../../shared/internal-url'
 
 export interface TransitionDependencies {
   createId: IdFactory
@@ -29,6 +30,8 @@ export function createDefaultState(dependencies: TransitionDependencies): AppSta
 function normalizeUrl(raw: string): string {
   const input = raw.trim()
   if (!input) return DEFAULT_URL
+  const internal = normalizeInternalUrl(input)
+  if (internal !== input) return internal
   try {
     return new URL(input).toString()
   } catch {

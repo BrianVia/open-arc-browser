@@ -83,14 +83,6 @@
   function submitUrl(): void {
     const input = urlInput.trim()
     if (!input) return
-    // chrome:// pages don't exist in Electron; the extensions one maps to our
-    // own management panel instead of a dead tab.
-    if (/^chrome:\/\/extensions\/?$/i.test(input)) {
-      extensionsOpen = true
-      urlInput = activeTab?.url ?? ''
-      openingNewTab = false
-      return
-    }
     if (activeTab && !openingNewTab) window.browser.command({ type: 'navigate', tabId: activeTab.id, url: input })
     else window.browser.command({ type: 'openTab', url: input })
     openingNewTab = false

@@ -4,6 +4,7 @@ import type { AppState, BrowserCommand, Tab } from '../src/shared'
 import { createDefaultState, transition, type TransitionDependencies } from '../src/main/state/transitions'
 
 interface MockViewRecord {
+  options: Record<string, unknown>
   webContents: {
     id: number
     closed: boolean
@@ -19,6 +20,7 @@ interface MockViewRecord {
     stopFindCalls: string[]
     focusCount: number
     handlers: Map<string, Array<(...args: unknown[]) => void>>
+    windowOpenHandler: ((details: { url: string }) => unknown) | undefined
     getURL(): string
     loadURL(url: string): Promise<void>
     isDestroyed(): boolean
@@ -138,6 +140,7 @@ vi.mock('electron', () => {
     stopFindCalls: string[] = []
     focusCount = 0
     handlers = new Map<string, Array<(...args: unknown[]) => void>>()
+    windowOpenHandler: ((details: { url: string }) => unknown) | undefined
     on(event: string, handler: (...args: unknown[]) => void): this {
       this.handlers.set(event, [...(this.handlers.get(event) ?? []), handler])
       return this
@@ -145,7 +148,9 @@ vi.mock('electron', () => {
     async fire(event: string, ...args: unknown[]): Promise<void> {
       for (const handler of [...(this.handlers.get(event) ?? [])]) handler(...args)
     }
-    setWindowOpenHandler(): void {}
+    setWindowOpenHandler(handler: (details: { url: string }) => unknown): void {
+      this.windowOpenHandler = handler
+    }
     getURL(): string { return this.currentUrl }
     async loadURL(url: string): Promise<void> { this.currentUrl = url }
     isDestroyed(): boolean { return this.closed }
@@ -164,8 +169,12 @@ vi.mock('electron', () => {
   }
   class MockWebContentsView {
     readonly webContents = new MockWebContents()
+    readonly options: Record<string, unknown>
     bounds: Rectangle | undefined
-    constructor() { mock.views.push(this) }
+    constructor(options: Record<string, unknown> = {}) {
+      this.options = options
+      mock.views.push(this)
+    }
     setBounds(bounds: Rectangle): void { this.bounds = bounds }
   }
   return {
@@ -526,6 +535,47 @@ describe('EngineHost reconciliation', () => {
     expect(states.get().tabs.at(-1)).toMatchObject({ url: 'https://linked.test/a', spaceId })
     clickItem(linked, 'Copy Link Address')
     expect(vi.mocked(clipboard.writeText)).toHaveBeenCalledWith('https://linked.test/a')
+  })
+
+  it('realizes arc://extensions as an isolated internal surface with a frozen domain record', async () => {
+    const states = stateHarness()
+    const window = new MockWindow()
+    const emitted: BrowserCommand[] = []
+    const host = new EngineHost(window as unknown as BrowserWindow, states.get(), (command) => {
+      emitted.push(command)
+      states.run(command)
+    }, { internalPageUrl: (surface) => `https://renderer.test/?surface=${surface}` })
+    const insets = { sidebarWidth: 260, top: 36 }
+
+    states.run({ type: 'openTab', url: 'arc://extensions' })
+    host.sync(states.get(), insets)
+    const tabId = states.get().tabs[0]!.id
+    const view = mock.views[0]!
+
+    expect(view.webContents.currentUrl).toBe('https://renderer.test/?surface=extensions')
+    expect(view.options.webPreferences).toMatchObject({ sandbox: true, contextIsolation: true })
+    expect(String((view.options.webPreferences as { preload?: string }).preload)).toMatch(/preload[/\\]index\.cjs$/)
+    expect(mock.sessions.size).toBe(0)
+    expect(emitted).toContainEqual({ type: 'tabEvent', tabId, event: { title: 'Extensions' } })
+
+    await view.webContents.fire('did-navigate', {}, 'https://renderer.test/?surface=extensions')
+    expect(emitted.filter((command) => command.type === 'tabEvent')).toHaveLength(1)
+    expect(states.get().tabs[0]).toMatchObject({ url: 'arc://extensions', title: 'Extensions' })
+
+    const navigation = { preventDefault: vi.fn(), url: 'https://escape.test' }
+    await view.webContents.fire('will-navigate', navigation)
+    expect(navigation.preventDefault).toHaveBeenCalled()
+    expect(view.webContents.windowOpenHandler?.({ url: 'https://popup.test' })).toEqual({ action: 'deny' })
+
+    host.sync(states.get(), insets)
+    host.sync(states.get(), insets)
+    expect(mock.views).toHaveLength(1)
+    expect(view.webContents.reloadCount).toBe(0)
+    expect(view.webContents.currentUrl).toBe('https://renderer.test/?surface=extensions')
+
+    states.run({ type: 'closeTab', tabId })
+    host.sync(states.get(), insets)
+    expect(view.webContents.closed).toBe(true)
   })
 
   it('routes find-in-page to the focused pane only', async () => {

@@ -14,6 +14,7 @@ export function wireIpc(
   hideCommandBar: () => void,
   onPermissionDecision: (decision: PermissionDecision) => void,
   onFindQuery: (query: FindQuery) => void,
+  isInternalSurface: (contents: WebContents) => boolean,
   onExtensionsQuery: (query: ExtensionsQuery) => Promise<ExtensionsEvent>
 ): () => void {
   const onCommand = (event: Electron.IpcMainEvent, raw: unknown): void => {
@@ -51,9 +52,25 @@ export function wireIpc(
   const sendState = (target: { readonly webContents: WebContents }, snapshot: AppState): void => {
     if (!target.webContents.isDestroyed()) target.webContents.send(IPC_CHANNELS.state, snapshot)
   }
+  // Internal surfaces (e.g. the extensions page) subscribe to state like the
+  // shell does; they announce themselves by talking over an accepted channel,
+  // at which point they get a snapshot immediately plus every later update.
+  const internalSurfaces = new Set<WebContents>()
+  const subscribeInternalSurface = (contents: WebContents): void => {
+    if (!isInternalSurface(contents) || internalSurfaces.has(contents)) return
+    internalSurfaces.add(contents)
+    sendState({ webContents: contents }, state.snapshot)
+  }
   const unsubscribe = state.subscribe((snapshot: AppState) => {
     sendState(windows.shell, snapshot)
     sendState(windows.commandBar, snapshot)
+    for (const contents of internalSurfaces) {
+      if (contents.isDestroyed()) {
+        internalSurfaces.delete(contents)
+        continue
+      }
+      contents.send(IPC_CHANNELS.state, snapshot)
+    }
   })
 
   const onCommandBarRequest = (event: Electron.IpcMainEvent, raw: unknown): void => {
@@ -77,7 +94,9 @@ export function wireIpc(
   ipcMain.on(IPC_CHANNELS.findQuery, onFindQueryEvent)
 
   const onExtensionsQueryEvent = (event: Electron.IpcMainEvent, raw: unknown): void => {
-    if (event.sender !== windows.shell.webContents) return
+    const accepted = event.sender === windows.shell.webContents || isInternalSurface(event.sender)
+    if (!accepted) return
+    subscribeInternalSurface(event.sender)
     const query = extensionsQuerySchema.parse(raw)
     void onExtensionsQuery(query).then((result) => {
       if (!event.sender.isDestroyed()) event.sender.send(IPC_CHANNELS.extensionsEvent, extensionsEventSchema.parse(result))
@@ -89,6 +108,7 @@ export function wireIpc(
   windows.commandBar.webContents.once('did-finish-load', () => sendState(windows.commandBar, state.snapshot))
   return () => {
     unsubscribe()
+    internalSurfaces.clear()
     ipcMain.removeListener(IPC_CHANNELS.command, onCommand)
     ipcMain.removeListener(IPC_CHANNELS.commandBarRequest, onCommandBarRequest)
     ipcMain.removeListener(IPC_CHANNELS.permissionDecision, onPermissionDecisionEvent)

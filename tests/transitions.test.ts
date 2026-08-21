@@ -180,4 +180,23 @@ describe('BrowserState transitions', () => {
     expect(findRememberedPermission(app.state, 'p1', 'https://deny.test', 'geolocation')).toBeUndefined()
     expect(findRememberedPermission(app.state, 'p2', 'https://allow.test', 'media')).toBeUndefined()
   })
+
+  it('normalizes chrome://extensions aliases onto arc://extensions in openTab and navigate', () => {
+    const app = harness()
+    app.run({ type: 'openTab', url: '  CHROME://Extensions/  ' })
+    const tab = app.state.tabs[0]!
+    expect(tab.url).toBe('arc://extensions')
+    expect(tab.nav.entries[0]?.url).toBe('arc://extensions')
+
+    app.run({ type: 'navigate', tabId: tab.id, url: 'chrome://extensions' })
+    expect(app.state.tabs[0]?.url).toBe('arc://extensions')
+  })
+
+  it('leaves internal urls untouched by https-prefixing', () => {
+    const app = harness()
+    app.run({ type: 'openTab', url: 'arc://extensions' })
+    expect(app.state.tabs[0]!.url).toBe('arc://extensions')
+    app.run({ type: 'navigate', tabId: app.state.tabs[0]!.id, url: 'arc://extensions/' })
+    expect(app.state.tabs[0]!.url).toBe('arc://extensions/')
+  })
 })

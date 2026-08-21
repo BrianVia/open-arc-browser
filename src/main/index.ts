@@ -1,6 +1,7 @@
 import { app, BrowserWindow } from 'electron'
 import { ElectronChromeExtensions } from 'electron-chrome-extensions'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { nanoid } from 'nanoid'
 import { EngineHost, type ViewInsets } from './engine/host'
 import { AcceleratorController, installApplicationMenu } from './accelerators'
@@ -13,6 +14,18 @@ let engine: EngineHost | undefined
 let commandBar: CommandBarHost | undefined
 let teardownIpc: (() => void) | undefined
 let insets: ViewInsets = { sidebarWidth: 260, top: 36 }
+
+function internalPageUrl(surface: string): string {
+  const rendererUrl = process.env.ELECTRON_RENDERER_URL
+  if (rendererUrl) {
+    const url = new URL(rendererUrl)
+    url.searchParams.set('surface', surface)
+    return url.toString()
+  }
+  const page = pathToFileURL(join(__dirname, '../renderer/index.html'))
+  page.searchParams.set('surface', surface)
+  return page.toString()
+}
 
 async function createApplication(): Promise<void> {
   const statePath = join(app.getPath('userData'), 'state.json')
@@ -34,7 +47,7 @@ async function createApplication(): Promise<void> {
     }
   })
   ElectronChromeExtensions.handleCRXProtocol(window.webContents.session)
-  engine = new EngineHost(window, initial, (command) => browserState?.dispatch(command))
+  engine = new EngineHost(window, initial, (command) => browserState?.dispatch(command), { internalPageUrl })
   commandBar = new CommandBarHost(window)
   const syncEngine = (): void => {
     engine?.sync(browserState?.snapshot ?? initial, insets)
@@ -46,7 +59,7 @@ async function createApplication(): Promise<void> {
   }, () => commandBar?.hide(), (decision) => engine?.answerPermission(decision.id, decision.allow, decision.remember), (query) => {
     if (query.type === 'close') engine?.closeFind()
     else engine?.findInPage(query.text, { forward: query.forward, findNext: query.findNext })
-  }, async (query) => {
+  }, (contents) => engine?.isInternalSurface(contents) ?? false, async (query) => {
     if (!engine) throw new Error('Extension engine is unavailable')
     return engine.handleExtensionsQuery(query)
   })

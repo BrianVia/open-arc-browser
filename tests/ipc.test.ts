@@ -51,6 +51,7 @@ describe('extensions IPC channel pair', () => {
       vi.fn(),
       vi.fn(),
       vi.fn(),
+      vi.fn(() => false),
       onExtensionsQuery
     )
 
@@ -62,5 +63,48 @@ describe('extensions IPC channel pair', () => {
 
     teardown()
     expect(ipc.removed).toContain(IPC_CHANNELS.extensionsQuery)
+  })
+
+  it('accepts queries from internal surfaces, rejects strangers, and streams state to internal surfaces', async () => {
+    const shellContents = { isDestroyed: () => false, send: vi.fn(), once: vi.fn() }
+    const commandBarContents = { isDestroyed: () => false, send: vi.fn(), once: vi.fn() }
+    const internalContents = { isDestroyed: () => false, send: vi.fn(), once: vi.fn() }
+    const strangerContents = { isDestroyed: () => false, send: vi.fn() }
+    const snapshot = newDefaultState(() => 'stable', () => 1)
+    const laterSnapshot = { ...snapshot, downloads: [] }
+    let broadcast: ((snapshot: unknown) => void) | undefined
+    const state = {
+      snapshot,
+      dispatch: vi.fn(),
+      subscribe: vi.fn((listener: (snapshot: unknown) => void) => {
+        broadcast = listener
+        return () => {}
+      })
+    }
+    const result: ExtensionsEvent = { type: 'list', profileId: snapshot.profiles[0]!.id, extensions: [] }
+    const onExtensionsQuery = vi.fn(async (_query: ExtensionsQuery) => result)
+    wireIpc(
+      { shell: { webContents: shellContents } as never, commandBar: { webContents: commandBarContents } as never },
+      state as never,
+      vi.fn(),
+      vi.fn(),
+      vi.fn(),
+      vi.fn(),
+      (contents: unknown) => contents === internalContents,
+      onExtensionsQuery
+    )
+
+    const handler = ipc.handlers.get(IPC_CHANNELS.extensionsQuery)!
+    handler({ sender: strangerContents }, { type: 'list' })
+    expect(onExtensionsQuery).not.toHaveBeenCalled()
+    expect(strangerContents.send).not.toHaveBeenCalled()
+
+    handler({ sender: internalContents }, { type: 'setEnabled', id: 'dark-reader', enabled: false })
+    await vi.waitFor(() => expect(internalContents.send).toHaveBeenCalledWith(IPC_CHANNELS.extensionsEvent, result))
+    expect(onExtensionsQuery).toHaveBeenCalledWith({ type: 'setEnabled', id: 'dark-reader', enabled: false })
+    expect(internalContents.send).toHaveBeenCalledWith(IPC_CHANNELS.state, snapshot)
+
+    broadcast!(laterSnapshot)
+    expect(internalContents.send).toHaveBeenCalledWith(IPC_CHANNELS.state, laterSnapshot)
   })
 })

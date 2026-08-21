@@ -2,7 +2,7 @@ import { BrowserWindow, Menu, WebContentsView, app, clipboard, nativeImage, sess
 import { basename, join } from 'node:path'
 import { nanoid } from 'nanoid'
 import { installChromeWebStore, uninstallExtension } from 'electron-chrome-web-store'
-import { IPC_CHANNELS, extensionInfoSchema, extensionsEventSchema, findEventSchema, permissionRequestEventSchema, type AppState, type BrowserCommand, type ExtensionInfo, type ExtensionsEvent, type ExtensionsQuery, type FindEvent, type PermissionRequestEvent, type PermissionType, type Tab } from '../../shared'
+import { IPC_CHANNELS, extensionInfoSchema, extensionsEventSchema, findEventSchema, isInternalUrl, permissionRequestEventSchema, type AppState, type BrowserCommand, type ExtensionInfo, type ExtensionsEvent, type ExtensionsQuery, type FindEvent, type PermissionRequestEvent, type PermissionType, type Tab } from '../../shared'
 import { findRememberedPermission } from '../state/transitions'
 import { ExtensionBridge, extensionsRootFor } from './extension-bridge'
 import { wirePageEvents } from './events'
@@ -12,6 +12,7 @@ export interface ViewInsets { sidebarWidth: number; top: number }
 
 export interface EngineDependencies {
   createId?: () => string
+  internalPageUrl?: (surface: string) => string
 }
 
 interface ViewRecord {
@@ -20,6 +21,7 @@ interface ViewRecord {
   profileId: string
   attached: boolean
   requestedUrl: string
+  internal: boolean
 }
 
 interface PendingPermission {
@@ -50,6 +52,7 @@ export class EngineHost {
   readonly #window: BrowserWindow
   readonly #emit: (command: BrowserCommand) => void
   readonly #createId: () => string
+  readonly #internalPageUrl: ((surface: string) => string) | undefined
   readonly #views = new Map<string, ViewRecord>()
   readonly #contentsToTab = new Map<number, string>()
   readonly #sessions = new Map<string, Session>()
@@ -67,6 +70,7 @@ export class EngineHost {
     this.#state = initialState
     this.#emit = emit
     this.#createId = dependencies.createId ?? nanoid
+    this.#internalPageUrl = dependencies.internalPageUrl
   }
 
   sync(state: AppState, insets: ViewInsets): void {
@@ -93,7 +97,7 @@ export class EngineHost {
         record.attached = true
       }
       record.view.setBounds(rectangle)
-      if (record.requestedUrl !== tab.url && record.view.webContents.getURL() !== tab.url) {
+      if (!record.internal && record.requestedUrl !== tab.url && record.view.webContents.getURL() !== tab.url) {
         record.requestedUrl = tab.url
         void record.view.webContents.loadURL(tab.url)
       }
@@ -134,6 +138,12 @@ export class EngineHost {
     if (!this.#findOpen) return
     this.#findOpen = false
     this.#endFindSession()
+  }
+
+  isInternalSurface(contents: WebContents): boolean {
+    const tabId = this.#contentsToTab.get(contents.id)
+    const record = tabId ? this.#views.get(tabId) : undefined
+    return record?.internal ?? false
   }
 
   async handleExtensionsQuery(query: ExtensionsQuery): Promise<ExtensionsEvent> {
@@ -215,34 +225,57 @@ export class EngineHost {
     const space = this.#state.spaces.find((item) => item.id === tab.spaceId)
     const profile = space && this.#state.profiles.find((item) => item.id === space.profileId)
     if (!profile) throw new Error(`Cannot create a view for tab ${tab.id}: profile is missing`)
+    const internal = isInternalUrl(tab.url)
+    const requestedUrl = internal ? this.#internalPageUrlFor('extensions') : tab.url
     const view = new WebContentsView({
-      webPreferences: {
-        session: this.#sessionFor(profile.id),
-        sandbox: true,
-        contextIsolation: true
-      }
+      webPreferences: internal
+        // Internal pages render in the window's default session so extension
+        // content (partitioned per profile) can never script them.
+        ? {
+            preload: join(__dirname, '../preload/index.cjs'),
+            sandbox: true,
+            contextIsolation: true
+          }
+        : {
+            session: this.#sessionFor(profile.id),
+            sandbox: true,
+            contextIsolation: true
+          }
     })
-    const record: ViewRecord = { view, tabId: tab.id, profileId: profile.id, attached: false, requestedUrl: tab.url }
+    const record: ViewRecord = { view, tabId: tab.id, profileId: profile.id, attached: false, requestedUrl, internal }
     this.#views.set(tab.id, record)
     this.#contentsToTab.set(view.webContents.id, tab.id)
-    this.#bridges.get(profile.id)?.addTab(view.webContents)
+    if (internal) {
+      this.#emit({ type: 'tabEvent', tabId: tab.id, event: { title: 'Extensions' } })
+      view.webContents.on('will-navigate', (event) => event.preventDefault())
+      view.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+    } else {
+      this.#bridges.get(profile.id)?.addTab(view.webContents)
+    }
     wirePageEvents(view.webContents, {
       tabFor: (contents) => this.#contentsToTab.get(contents.id),
       state: () => this.#state,
       emit: this.#emit
     }, () => this.#destroy(record))
-    this.#wirePopupPolicy(view.webContents, tab.id)
+    if (!internal) this.#wirePopupPolicy(view.webContents, tab.id)
     this.#wireContextMenu(view.webContents, tab.id)
     view.webContents.on('found-in-page', (_event, result) => {
       if (!this.#findOpen || this.#findContentsId !== view.webContents.id) return
       this.#sendFindEvent({ type: 'matches', activeMatchOrdinal: result.activeMatchOrdinal, matches: result.matches })
     })
-    if (tab.nav.entries.length) {
+    if (internal) {
+      void view.webContents.loadURL(requestedUrl)
+    } else if (tab.nav.entries.length) {
       void view.webContents.navigationHistory.restore({ entries: tab.nav.entries, index: tab.nav.index })
     } else {
       void view.webContents.loadURL(tab.url)
     }
     return record
+  }
+
+  #internalPageUrlFor(surface: string): string {
+    if (!this.#internalPageUrl) throw new Error(`EngineHost: internalPageUrl dependency is required to realize the ${surface} surface`)
+    return this.#internalPageUrl(surface)
   }
 
   #sessionFor(profileId: string): Session {
@@ -417,7 +450,9 @@ export class EngineHost {
     for (const [id, pending] of this.#pendingPermissions) {
       if (pending.contentsId === record.view.webContents.id) this.#settlePermission(id, false)
     }
-    if (!record.view.webContents.isDestroyed()) this.#bridges.get(record.profileId)?.removeTab(record.view.webContents)
+    if (!record.view.webContents.isDestroyed() && !record.internal) {
+      this.#bridges.get(record.profileId)?.removeTab(record.view.webContents)
+    }
     this.#views.delete(record.tabId)
     this.#contentsToTab.delete(record.view.webContents.id)
     if (!record.view.webContents.isDestroyed()) record.view.webContents.close()
