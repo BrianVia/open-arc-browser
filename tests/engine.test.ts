@@ -62,6 +62,16 @@ interface MockExtensionsInstance {
 const crx = vi.hoisted(() => ({ instances: [] as unknown[] }))
 const extensionInstances = (): MockExtensionsInstance[] => crx.instances as MockExtensionsInstance[]
 const webStore = vi.hoisted(() => ({ installs: [] as unknown[], uninstalls: [] as unknown[] }))
+const sideload = vi.hoisted(() => ({ roots: [] as string[], fail: false }))
+
+vi.mock('../src/main/engine/sideload', () => ({
+  // Mirrors the real contract: warns and resolves, never rejects.
+  ensureSideloadedExtensions: async (root: string): Promise<void> => {
+    sideload.roots.push(root)
+    if (sideload.fail) console.warn(`sideload: could not provision uBlock Origin for ${root}`)
+  }
+}))
+
 
 vi.mock('electron-chrome-web-store', () => ({
   installChromeWebStore: vi.fn(async (options: unknown) => { webStore.installs.push(options) }),
@@ -269,6 +279,8 @@ beforeEach(() => {
   crx.instances.length = 0
   webStore.installs.length = 0
   webStore.uninstalls.length = 0
+  sideload.roots.length = 0
+  sideload.fail = false
 })
 
 function makeDownloadItem(url: string, filename: string, totalBytes: number): MockDownloadItem {
@@ -665,7 +677,7 @@ describe('EngineHost extension-bridge wiring', () => {
     }
   }
 
-  it('registers views per profile bridge, reports scoped active tabs, and unregisters on destroy', () => {
+  it('registers views per profile bridge, reports scoped active tabs, and unregisters on destroy', async () => {
     const states = stateHarness()
     const window = new MockWindow()
     const host = new EngineHost(window as unknown as BrowserWindow, twoProfileState(), () => {})
@@ -689,6 +701,8 @@ describe('EngineHost extension-bridge wiring', () => {
     host.sync(states.get(), insets)
     expect(bridgeA.removed).toEqual([mock.views[1]?.webContents])
     expect(mock.views[1]?.webContents.closed).toBe(true)
+    // The web store install is chained behind the sideload pass (a microtask).
+    await Promise.resolve()
     expect(webStore.installs).toEqual(expect.arrayContaining([
       expect.objectContaining({ extensionsPath: '/mock-userData/extensions/pa', allowUnpackedExtensions: true }),
       expect.objectContaining({ extensionsPath: '/mock-userData/extensions/pb', allowUnpackedExtensions: true })
@@ -743,5 +757,16 @@ describe('EngineHost extension-bridge wiring', () => {
     const before = state.tabs.length
     await extensionInstances()[0]!.options.removeTab!(contents)
     expect(state.tabs).toHaveLength(before - 1)
+  })
+
+  it('still initializes the session when sideloading fails, chaining the web store behind it', async () => {
+    sideload.fail = true
+    const window = new MockWindow()
+    const host = new EngineHost(window as unknown as BrowserWindow, twoProfileState(), () => {})
+    host.sync(twoProfileState(), { sidebarWidth: 260, top: 36 })
+
+    expect(sideload.roots).toEqual(['/mock-userData/extensions/pb'])
+    await expect(host.handleExtensionsQuery({ type: 'list' })).resolves.toEqual({ type: 'list', profileId: 'pb', extensions: [] })
+    expect(webStore.installs).toEqual([expect.objectContaining({ extensionsPath: '/mock-userData/extensions/pb', allowUnpackedExtensions: true })])
   })
 })

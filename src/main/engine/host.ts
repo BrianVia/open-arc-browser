@@ -5,6 +5,7 @@ import { installChromeWebStore, uninstallExtension } from 'electron-chrome-web-s
 import { IPC_CHANNELS, extensionInfoSchema, extensionsEventSchema, findEventSchema, isInternalUrl, permissionRequestEventSchema, type AppState, type BrowserCommand, type ExtensionInfo, type ExtensionsEvent, type ExtensionsQuery, type FindEvent, type PermissionRequestEvent, type PermissionType, type Tab } from '../../shared'
 import { findRememberedPermission } from '../state/transitions'
 import { ExtensionBridge, extensionsRootFor } from './extension-bridge'
+import { ensureSideloadedExtensions } from './sideload'
 import { wirePageEvents } from './events'
 import { buildPageContextMenu, type ContextMenuParams } from './context-menu'
 
@@ -281,10 +282,10 @@ export class EngineHost {
   #sessionFor(profileId: string): Session {
     let existing = this.#sessions.get(profileId)
     if (!existing) {
-      existing = session.fromPartition(`persist:profile-${profileId}`)
-      this.#wireDownloads(existing)
-      this.#wirePermissions(existing)
-      this.#bridges.set(profileId, new ExtensionBridge(existing, {
+      const profileSession = session.fromPartition(`persist:profile-${profileId}`)
+      this.#wireDownloads(profileSession)
+      this.#wirePermissions(profileSession)
+      this.#bridges.set(profileId, new ExtensionBridge(profileSession, {
         profileId,
         window: this.#window,
         emit: this.#emit,
@@ -300,13 +301,16 @@ export class EngineHost {
       // v0.13 defaults to MV3-only installs. Combined with the extension
       // bridge's partial MV3 implementation, target extensions still require
       // the manual validation called out in SPEC-M3.
-      const ready = installChromeWebStore({
-        session: existing,
-        extensionsPath: extensionsRootFor(profileId),
+      // Sideload uBlock Origin first so the first-run download is picked up
+      // by the same load pass; it never rejects (warns instead).
+      const extensionsPath = extensionsRootFor(profileId)
+      const ready = ensureSideloadedExtensions(extensionsPath).then(() => installChromeWebStore({
+        session: profileSession,
+        extensionsPath,
         allowUnpackedExtensions: true
-      }).catch((error) => console.error(`ExtensionBridge: failed to initialize Chrome Web Store for profile ${profileId}`, error))
+      })).catch((error) => console.error(`ExtensionBridge: failed to initialize Chrome Web Store for profile ${profileId}`, error))
       this.#extensionReady.set(profileId, ready)
-      this.#sessions.set(profileId, existing)
+      this.#sessions.set(profileId, existing = profileSession)
     }
     return existing
   }
