@@ -6,7 +6,14 @@ export default defineConfig({
     build: { rollupOptions: { input: 'src/main/index.ts' } }
   },
   preload: {
-    build: { rollupOptions: { input: 'src/preload/index.ts' } }
+    // Sandboxed preloads must be CommonJS; ESM .mjs preloads fail silently
+    // with sandbox: true.
+    build: {
+      rollupOptions: {
+        input: 'src/preload/index.ts',
+        output: { format: 'cjs', entryFileNames: '[name].cjs' }
+      }
+    }
   },
   renderer: {
     root: 'src/ui',

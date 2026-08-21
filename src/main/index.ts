@@ -23,7 +23,7 @@ async function createApplication(): Promise<void> {
     frame: false,
     backgroundColor: '#15151a',
     webPreferences: {
-      preload: join(__dirname, '../preload/index.mjs'),
+      preload: join(__dirname, '../preload/index.cjs'),
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false
