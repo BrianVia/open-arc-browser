@@ -13,6 +13,7 @@ const state: AppState = {
     { id: 'other', spaceId: 'work', title: 'Example other', url: 'https://other.example.com', faviconUrl: '', pinned: false, muted: false, lastActiveAt: 2, nav: { entries: [], index: -1 } }
   ],
   downloads: [],
+  permissions: [],
   activeSpaceId: 'home',
   activeTabId: { home: 'current', work: 'other' }
 }

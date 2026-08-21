@@ -5,11 +5,15 @@ import {
   commandBarEventSchema,
   commandBarRequestSchema,
   ipcCommandSchema,
+  permissionDecisionSchema,
+  permissionRequestEventSchema,
   type AppState,
   type BrowserApi,
   type CommandBarEvent,
   type CommandBarRequest,
-  type IpcCommand
+  type IpcCommand,
+  type PermissionDecision,
+  type PermissionRequestEvent
 } from '../shared'
 
 const api: BrowserApi = {
@@ -28,6 +32,14 @@ const api: BrowserApi = {
     const handler = (_event: Electron.IpcRendererEvent, raw: unknown): void => listener(commandBarEventSchema.parse(raw))
     ipcRenderer.on(IPC_CHANNELS.commandBarEvent, handler)
     return () => ipcRenderer.removeListener(IPC_CHANNELS.commandBarEvent, handler)
+  },
+  onPermissionRequest(listener: (event: PermissionRequestEvent) => void): () => void {
+    const handler = (_event: Electron.IpcRendererEvent, raw: unknown): void => listener(permissionRequestEventSchema.parse(raw))
+    ipcRenderer.on(IPC_CHANNELS.permissionRequest, handler)
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.permissionRequest, handler)
+  },
+  answerPermission(decision: PermissionDecision): void {
+    ipcRenderer.send(IPC_CHANNELS.permissionDecision, permissionDecisionSchema.parse(decision))
   }
 }
 

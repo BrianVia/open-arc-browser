@@ -1,4 +1,4 @@
-import type { AppState, BrowserCommand, Clock, Download, IdFactory, Space, Tab } from './types'
+import type { AppState, BrowserCommand, Clock, Download, IdFactory, PermissionRecord, PermissionType, Space, Tab } from './types'
 
 export interface TransitionDependencies {
   createId: IdFactory
@@ -8,6 +8,10 @@ export interface TransitionDependencies {
 const DEFAULT_URL = 'https://www.google.com/'
 const DOWNLOAD_LIMIT = 50
 
+export function findRememberedPermission(state: AppState, profileId: string, origin: string, permission: PermissionType): boolean | undefined {
+  return state.permissions.find((item) => item.profileId === profileId && item.origin === origin && item.permission === permission)?.allow
+}
+
 export function createDefaultState(dependencies: TransitionDependencies): AppState {
   const profileId = dependencies.createId()
   const spaceId = dependencies.createId()
@@ -16,6 +20,7 @@ export function createDefaultState(dependencies: TransitionDependencies): AppSta
     spaces: [{ id: spaceId, profileId, name: 'Home', color: '#8b7cf6', split: null }],
     tabs: [],
     downloads: [],
+    permissions: [],
     activeSpaceId: spaceId,
     activeTabId: { [spaceId]: null }
   }
@@ -153,6 +158,14 @@ export function transition(state: AppState, command: BrowserCommand, dependencie
       const others = state.downloads.filter((item) => item.id !== incoming.id)
       const downloads = [record, ...others].slice(0, DOWNLOAD_LIMIT)
       return { ...state, downloads }
+    }
+    case 'rememberPermission': {
+      const record: PermissionRecord = { profileId: command.profileId, origin: command.origin, permission: command.permission, allow: command.allow }
+      const permissions = [
+        ...state.permissions.filter((item) => item.profileId !== record.profileId || item.origin !== record.origin || item.permission !== record.permission),
+        record
+      ]
+      return { ...state, permissions }
     }
     case 'tabEvent': {
       return withUpdatedTab(state, command.tabId, (tab) => {

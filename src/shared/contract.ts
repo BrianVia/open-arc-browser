@@ -49,11 +49,19 @@ export const downloadSchema = z.object({
   totalBytes: z.number().int().min(0),
   startedAt: z.number()
 })
+export const permissionTypeSchema = z.enum(['notifications', 'geolocation', 'media', 'clipboard-read', 'pointerLock'])
+export const permissionRecordSchema = z.object({
+  profileId: id,
+  origin: z.string().min(1),
+  permission: permissionTypeSchema,
+  allow: z.boolean()
+})
 export const appStateSchema = z.object({
   profiles: z.array(profileSchema),
   spaces: z.array(spaceSchema),
   tabs: z.array(tabSchema),
   downloads: z.array(downloadSchema).default([]),
+  permissions: z.array(permissionRecordSchema).default([]),
   activeSpaceId: id,
   activeTabId: z.record(id, id.nullable())
 })
@@ -81,7 +89,8 @@ export const browserCommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('setSplit'), spaceId: id, tabIds: z.union([z.tuple([id]), z.tuple([id, id])]), focused: z.union([z.literal(0), z.literal(1)]) }),
   z.object({ type: z.literal('setSplitFocus'), spaceId: id, focused: z.union([z.literal(0), z.literal(1)]) }),
   z.object({ type: z.literal('tabEvent'), tabId: id, event: tabEventSchema }),
-  z.object({ type: z.literal('downloadEvent'), download: downloadSchema })
+  z.object({ type: z.literal('downloadEvent'), download: downloadSchema }),
+  z.object({ type: z.literal('rememberPermission'), profileId: id, origin: z.string().min(1), permission: permissionTypeSchema, allow: z.boolean() })
 ])
 
 export const shellCommandSchema = z.discriminatedUnion('type', [
@@ -108,11 +117,19 @@ export const commandBarEventSchema = z.object({
   intent: commandBarIntentSchema
 })
 
+export const permissionRequestEventSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('request'), id, origin: z.string().min(1), permission: permissionTypeSchema }),
+  z.object({ type: z.literal('closed'), id })
+])
+export const permissionDecisionSchema = z.object({ id, allow: z.boolean(), remember: z.boolean() })
+
 export type Profile = z.infer<typeof profileSchema>
 export type Split = z.infer<typeof splitSchema>
 export type Space = z.infer<typeof spaceSchema>
 export type Tab = z.infer<typeof tabSchema>
 export type Download = z.infer<typeof downloadSchema>
+export type PermissionType = z.infer<typeof permissionTypeSchema>
+export type PermissionRecord = z.infer<typeof permissionRecordSchema>
 export type AppState = z.infer<typeof appStateSchema>
 export type PersistedState = z.infer<typeof persistedStateSchema>
 export type BrowserCommand = z.infer<typeof browserCommandSchema>
@@ -120,12 +137,16 @@ export type IpcCommand = z.infer<typeof ipcCommandSchema>
 export type CommandBarIntent = z.infer<typeof commandBarIntentSchema>
 export type CommandBarRequest = z.infer<typeof commandBarRequestSchema>
 export type CommandBarEvent = z.infer<typeof commandBarEventSchema>
+export type PermissionRequestEvent = z.infer<typeof permissionRequestEventSchema>
+export type PermissionDecision = z.infer<typeof permissionDecisionSchema>
 
 export const IPC_CHANNELS = {
   command: 'command',
   state: 'state',
   commandBarRequest: 'commandbar:request',
-  commandBarEvent: 'commandbar:event'
+  commandBarEvent: 'commandbar:event',
+  permissionRequest: 'permission:request',
+  permissionDecision: 'permission:decision'
 } as const
 
 export interface BrowserApi {
@@ -133,4 +154,6 @@ export interface BrowserApi {
   subscribe(listener: (state: AppState) => void): () => void
   requestCommandBar(request: CommandBarRequest): void
   onCommandBarEvent(listener: (event: CommandBarEvent) => void): () => void
+  onPermissionRequest(listener: (event: PermissionRequestEvent) => void): () => void
+  answerPermission(decision: PermissionDecision): void
 }

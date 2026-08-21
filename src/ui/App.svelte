@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { AppState, Download, Tab } from '../shared'
+  import type { AppState, Download, PermissionRequestEvent, Tab } from '../shared'
   import Button from './foundation/Button.svelte'
   import SidebarItem from './foundation/SidebarItem.svelte'
   import WindowShell from './foundation/WindowShell.svelte'
@@ -11,6 +11,8 @@
   let newSpaceName = $state('')
   let openingNewTab = $state(false)
   let urlField: HTMLInputElement
+  let permissionPrompts = $state<PermissionRequestEvent[]>([])
+  let rememberChoices = $state<Record<string, boolean>>({})
 
   const activeSpace = $derived(appState?.spaces.find((space) => space.id === appState?.activeSpaceId))
   const activeTab = $derived(appState?.tabs.find((tab) => tab.id === appState?.activeTabId[appState.activeSpaceId]))
@@ -27,7 +29,20 @@
 
   $effect(() => {
     window.browser.command({ type: 'setInsets', sidebarWidth: 260, top: 36 })
-    return window.browser.subscribe((next) => { appState = next })
+    const unsubscribeState = window.browser.subscribe((next) => { appState = next })
+    const unsubscribePermissions = window.browser.onPermissionRequest((event) => {
+      if (event.type === 'request') {
+        rememberChoices[event.id] = false
+        permissionPrompts = [...permissionPrompts.filter((item) => item.id !== event.id), event]
+      } else {
+        permissionPrompts = permissionPrompts.filter((item) => item.id !== event.id)
+        delete rememberChoices[event.id]
+      }
+    })
+    return () => {
+      unsubscribeState()
+      unsubscribePermissions()
+    }
   })
 
   function submitUrl(): void {
@@ -77,11 +92,40 @@
   function revealDownload(download: Download): void {
     window.browser.command({ type: 'showItemInFolder', path: download.savePath })
   }
+
+  const permissionLabels: Record<Extract<PermissionRequestEvent, { type: 'request' }>['permission'], string> = {
+    notifications: 'show notifications',
+    geolocation: 'know your location',
+    media: 'use your camera and microphone',
+    'clipboard-read': 'read copied text',
+    pointerLock: 'lock your pointer'
+  }
+
+  function answerPermission(prompt: Extract<PermissionRequestEvent, { type: 'request' }>, allow: boolean): void {
+    window.browser.answerPermission({ id: prompt.id, allow, remember: rememberChoices[prompt.id] ?? false })
+    permissionPrompts = permissionPrompts.filter((item) => item.id !== prompt.id)
+    delete rememberChoices[prompt.id]
+  }
 </script>
 
 <WindowShell />
 
 <aside style:--space-color={activeSpace?.color ?? '#8b7cf6'}>
+  {#each permissionPrompts as prompt (prompt.id)}
+    {#if prompt.type === 'request'}
+      <div class="permission" role="alert">
+        <span class="permission-text"><strong>{prompt.origin}</strong> wants to {permissionLabels[prompt.permission]}.</span>
+        <div class="permission-actions">
+          <label class="permission-remember">
+            <input type="checkbox" bind:checked={rememberChoices[prompt.id]} /> Remember
+          </label>
+          <button class="permission-button" onclick={() => answerPermission(prompt, false)}>Block</button>
+          <button class="permission-button allow" onclick={() => answerPermission(prompt, true)}>Allow</button>
+        </div>
+      </div>
+    {/if}
+  {/each}
+
   <form class="url" onsubmit={(event) => { event.preventDefault(); submitUrl() }}>
     <span aria-hidden="true">⌕</span>
     <input bind:this={urlField} bind:value={urlInput} aria-label="URL or search" placeholder="Search or enter URL" />
@@ -174,6 +218,22 @@
   }
   .url span { color: var(--muted); font-size: 16px; }
   .url input, .space-form input { min-width: 0; width: 100%; border: 0; outline: 0; background: transparent; }
+  .permission {
+    display: flex; flex-direction: column; gap: 8px; margin: 0 2px 10px;
+    padding: 10px 11px; border-radius: 12px; background: var(--surface-strong); border: 1px solid var(--line);
+  }
+  .permission-text { font-size: 12px; line-height: 1.4; color: var(--text); overflow-wrap: anywhere; }
+  .permission-text strong { font-weight: 600; }
+  .permission-actions { display: flex; align-items: center; gap: 6px; }
+  .permission-remember { display: flex; align-items: center; gap: 5px; margin-right: auto; color: var(--muted); font-size: 11px; cursor: pointer; }
+  .permission-remember input { accent-color: var(--space-color); margin: 0; }
+  .permission-button {
+    padding: 4px 10px; border-radius: 8px; background: transparent; color: var(--muted);
+    font-size: 12px; border: 1px solid var(--line); cursor: pointer;
+  }
+  .permission-button:hover { color: var(--text); background: var(--hover); }
+  .permission-button.allow { color: var(--shell); background: var(--space-color); border-color: transparent; }
+  .permission-button.allow:hover { filter: brightness(1.08); }
   .new-tab {
     display: flex; align-items: center; width: 100%; gap: 8px; padding: 7px 9px; border-radius: 9px;
     background: transparent; text-align: left; color: var(--muted);

@@ -2,6 +2,8 @@ export type {
   AppState,
   BrowserCommand,
   Download,
+  PermissionRecord,
+  PermissionType,
   PersistedState,
   Profile,
   Space,

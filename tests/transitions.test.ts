@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AppState, BrowserCommand, Download } from '../src/shared'
-import { createDefaultState, transition, type TransitionDependencies } from '../src/main/state/transitions'
+import { createDefaultState, findRememberedPermission, transition, type TransitionDependencies } from '../src/main/state/transitions'
 
 function harness(): { state: AppState; run: (command: BrowserCommand) => AppState } {
   let sequence = 0
@@ -151,5 +151,33 @@ describe('BrowserState transitions', () => {
     app.run({ type: 'downloadEvent', download: { ...oldest, receivedBytes: 2 } })
     expect(app.state.downloads).toHaveLength(50)
     expect(app.state.downloads[0]?.id).toBe(oldest.id)
+  })
+
+  it('records remembered permission decisions, upserting per profile/origin/permission', () => {
+    const app = harness()
+    expect(app.state.permissions).toEqual([])
+    app.run({ type: 'rememberPermission', profileId: 'p1', origin: 'https://site.test', permission: 'notifications', allow: true })
+    expect(app.state.permissions).toEqual([{ profileId: 'p1', origin: 'https://site.test', permission: 'notifications', allow: true }])
+
+    app.run({ type: 'rememberPermission', profileId: 'p1', origin: 'https://site.test', permission: 'geolocation', allow: false })
+    app.run({ type: 'rememberPermission', profileId: 'p2', origin: 'https://site.test', permission: 'notifications', allow: false })
+    expect(app.state.permissions).toHaveLength(3)
+
+    app.run({ type: 'rememberPermission', profileId: 'p1', origin: 'https://site.test', permission: 'notifications', allow: false })
+    expect(app.state.permissions).toHaveLength(3)
+    expect(app.state.permissions.filter((item) => item.permission === 'notifications')).toEqual([
+      { profileId: 'p2', origin: 'https://site.test', permission: 'notifications', allow: false },
+      { profileId: 'p1', origin: 'https://site.test', permission: 'notifications', allow: false }
+    ])
+  })
+
+  it('looks up remembered permissions by profile, origin and permission', () => {
+    const app = harness()
+    app.run({ type: 'rememberPermission', profileId: 'p1', origin: 'https://allow.test', permission: 'media', allow: true })
+    app.run({ type: 'rememberPermission', profileId: 'p1', origin: 'https://deny.test', permission: 'pointerLock', allow: false })
+    expect(findRememberedPermission(app.state, 'p1', 'https://allow.test', 'media')).toBe(true)
+    expect(findRememberedPermission(app.state, 'p1', 'https://deny.test', 'pointerLock')).toBe(false)
+    expect(findRememberedPermission(app.state, 'p1', 'https://deny.test', 'geolocation')).toBeUndefined()
+    expect(findRememberedPermission(app.state, 'p2', 'https://allow.test', 'media')).toBeUndefined()
   })
 })

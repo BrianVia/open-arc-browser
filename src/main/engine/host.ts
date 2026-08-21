@@ -1,7 +1,8 @@
 import { BrowserWindow, WebContentsView, app, session, type DownloadItem, type Rectangle, type Session, type WebContents } from 'electron'
 import { basename, join } from 'node:path'
 import { nanoid } from 'nanoid'
-import type { AppState, BrowserCommand, Tab } from '../../shared'
+import { IPC_CHANNELS, permissionRequestEventSchema, type AppState, type BrowserCommand, type PermissionRequestEvent, type PermissionType, type Tab } from '../../shared'
+import { findRememberedPermission } from '../state/transitions'
 import { wirePageEvents } from './events'
 
 export interface ViewInsets { sidebarWidth: number; top: number }
@@ -17,7 +18,24 @@ interface ViewRecord {
   requestedUrl: string
 }
 
+interface PendingPermission {
+  origin: string
+  permission: PermissionType
+  profileId: string
+  contentsId: number
+  decide: (allow: boolean) => void
+  timer: ReturnType<typeof setTimeout>
+}
+
 const PROGRESS_INTERVAL_MS = 500
+const PERMISSION_TIMEOUT_MS = 30_000
+const PROMPTED_PERMISSIONS: Record<string, PermissionType> = {
+  notifications: 'notifications',
+  geolocation: 'geolocation',
+  media: 'media',
+  'clipboard-read': 'clipboard-read',
+  pointerLock: 'pointerLock'
+}
 
 export class EngineHost {
   readonly #window: BrowserWindow
@@ -27,6 +45,7 @@ export class EngineHost {
   readonly #contentsToTab = new Map<number, string>()
   readonly #sessions = new Map<string, Session>()
   readonly #lastProgressAt = new Map<string, number>()
+  readonly #pendingPermissions = new Map<string, PendingPermission>()
   #state: AppState
 
   constructor(window: BrowserWindow, initialState: AppState, emit: (command: BrowserCommand) => void, dependencies: EngineDependencies = {}) {
@@ -68,6 +87,7 @@ export class EngineHost {
   }
 
   destroy(): void {
+    for (const requestId of [...this.#pendingPermissions.keys()]) this.#settlePermission(requestId, false)
     for (const record of [...this.#views.values()]) this.#destroy(record)
   }
 
@@ -113,9 +133,69 @@ export class EngineHost {
     if (!existing) {
       existing = session.fromPartition(`persist:profile-${profileId}`)
       this.#wireDownloads(existing)
+      this.#wirePermissions(existing)
       this.#sessions.set(profileId, existing)
     }
     return existing
+  }
+
+  #wirePermissions(profileSession: Session): void {
+    profileSession.setPermissionRequestHandler((contents, permission, callback) => {
+      this.#handlePermissionRequest(contents, permission, callback)
+    })
+  }
+
+  answerPermission(id: string, allow: boolean, remember: boolean): void {
+    const pending = this.#pendingPermissions.get(id)
+    if (!pending) return
+    if (remember) this.#emit({ type: 'rememberPermission', profileId: pending.profileId, origin: pending.origin, permission: pending.permission, allow })
+    this.#settlePermission(id, allow)
+  }
+
+  #handlePermissionRequest(contents: WebContents, permission: string, callback: (allow: boolean) => void): void {
+    if (permission === 'fullscreen') {
+      callback(true)
+      return
+    }
+    const mapped = PROMPTED_PERMISSIONS[permission]
+    const origin = originOf(contents.getURL())
+    const profileId = mapped && origin ? this.#profileIdForContents(contents) : undefined
+    if (!mapped || !origin || !profileId || contents.isDestroyed()) {
+      callback(false)
+      return
+    }
+    const remembered = findRememberedPermission(this.#state, profileId, origin, mapped)
+    if (remembered !== undefined) {
+      callback(remembered)
+      return
+    }
+    const id = this.#createId()
+    const timer = setTimeout(() => this.#settlePermission(id, false), PERMISSION_TIMEOUT_MS)
+    this.#pendingPermissions.set(id, { origin, permission: mapped, profileId, contentsId: contents.id, decide: callback, timer })
+    this.#sendPermissionEvent({ type: 'request', id, origin, permission: mapped })
+  }
+
+  #settlePermission(id: string, allow: boolean): void {
+    const pending = this.#pendingPermissions.get(id)
+    if (!pending) return
+    this.#pendingPermissions.delete(id)
+    clearTimeout(pending.timer)
+    pending.decide(allow)
+    this.#sendPermissionEvent({ type: 'closed', id })
+  }
+
+  #sendPermissionEvent(event: PermissionRequestEvent): void {
+    const payload = permissionRequestEventSchema.parse(event)
+    const contents = this.#window.webContents
+    if (!contents || contents.isDestroyed()) return
+    contents.send(IPC_CHANNELS.permissionRequest, payload)
+  }
+
+  #profileIdForContents(contents: WebContents): string | undefined {
+    const tabId = this.#contentsToTab.get(contents.id)
+    const tab = tabId ? this.#state.tabs.find((item) => item.id === tabId) : undefined
+    const space = tab && this.#state.spaces.find((item) => item.id === tab.spaceId)
+    return space?.profileId
   }
 
   #wireDownloads(profileSession: Session): void {
@@ -200,8 +280,19 @@ export class EngineHost {
 
   #destroy(record: ViewRecord): void {
     this.#detach(record)
+    for (const [id, pending] of this.#pendingPermissions) {
+      if (pending.contentsId === record.view.webContents.id) this.#settlePermission(id, false)
+    }
     this.#views.delete(record.tabId)
     this.#contentsToTab.delete(record.view.webContents.id)
     if (!record.view.webContents.isDestroyed()) record.view.webContents.close()
+  }
+}
+
+function originOf(url: string): string {
+  try {
+    return new URL(url).origin
+  } catch {
+    return ''
   }
 }

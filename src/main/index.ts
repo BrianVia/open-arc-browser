@@ -37,7 +37,7 @@ async function createApplication(): Promise<void> {
   teardownIpc = wireIpc({ shell: window, commandBar: commandBar.window }, browserState, (nextInsets) => {
     insets = nextInsets
     engine?.sync(browserState?.snapshot ?? initial, insets)
-  }, () => commandBar?.hide())
+  }, () => commandBar?.hide(), (decision) => engine?.answerPermission(decision.id, decision.allow, decision.remember))
   const accelerators = new AcceleratorController({
     snapshot: () => browserState?.snapshot ?? initial,
     dispatch: (command) => browserState?.dispatch(command),
