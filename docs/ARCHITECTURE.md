@@ -78,8 +78,9 @@ browser bug class where the sidebar and the real tabs disagree.
 - **Layout contract:** web views z-stack *above* the window's DOM — the
   Svelte UI can never overlay a page. Shell UI publishes insets (sidebar
   width, topbar height) over IPC; EngineHost alone computes pane rects from
-  state + insets. The command-bar palette therefore renders as a separate
-  frameless transparent child window, not a DOM overlay.
+  state + insets. The command-bar palette is a `WebContentsView` that
+  CommandBarHost attaches above the page views inside the same window
+  (transparent background; re-raised after every engine sync while visible).
 
 ### 3. Shell UI (Svelte, aurora-linux)
 

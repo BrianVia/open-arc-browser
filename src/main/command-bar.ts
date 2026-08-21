@@ -1,30 +1,21 @@
-import { BrowserWindow } from 'electron'
+import { BrowserWindow, WebContentsView, type WebContents } from 'electron'
 import { join } from 'node:path'
 import { IPC_CHANNELS, type CommandBarEvent, type CommandBarIntent } from '../shared'
 
 const WIDTH = 560
 const HEIGHT = 430
+const TOP_RATIO = 0.18
 
 export class CommandBarHost {
-  readonly window: BrowserWindow
+  readonly view: WebContentsView
   readonly #parent: BrowserWindow
   #loaded = false
+  #visible = false
   #pendingIntent: CommandBarIntent | undefined
 
   constructor(parent: BrowserWindow) {
     this.#parent = parent
-    this.window = new BrowserWindow({
-      parent,
-      width: WIDTH,
-      height: HEIGHT,
-      frame: false,
-      transparent: true,
-      alwaysOnTop: true,
-      resizable: false,
-      show: false,
-      skipTaskbar: true,
-      hasShadow: false,
-      backgroundColor: '#00000000',
+    this.view = new WebContentsView({
       webPreferences: {
         preload: join(__dirname, '../preload/index.cjs'),
         contextIsolation: true,
@@ -32,27 +23,31 @@ export class CommandBarHost {
         nodeIntegration: false
       }
     })
-    this.window.on('blur', () => this.hide())
-    parent.on('move', () => this.#position())
-    parent.on('resize', () => this.#position())
-    this.window.webContents.on('did-finish-load', () => {
+    this.view.setBackgroundColor('#00000000')
+    this.view.webContents.on('did-finish-load', () => {
       this.#loaded = true
       if (this.#pendingIntent) this.#reveal(this.#pendingIntent)
     })
+    this.view.webContents.on('blur', () => this.hide())
+    parent.on('resize', () => this.#layout())
+  }
+
+  get webContents(): WebContents {
+    return this.view.webContents
   }
 
   async load(rendererUrl: string | undefined): Promise<void> {
     if (rendererUrl) {
       const url = new URL(rendererUrl)
       url.searchParams.set('surface', 'commandbar')
-      await this.window.loadURL(url.toString())
+      await this.view.webContents.loadURL(url.toString())
     } else {
-      await this.window.loadFile(join(__dirname, '../renderer/index.html'), { query: { surface: 'commandbar' } })
+      await this.view.webContents.loadFile(join(__dirname, '../renderer/index.html'), { query: { surface: 'commandbar' } })
     }
   }
 
   toggle(intent: CommandBarIntent): void {
-    if (this.window.isVisible()) {
+    if (this.#visible) {
       this.hide()
       return
     }
@@ -62,28 +57,47 @@ export class CommandBarHost {
 
   hide(): void {
     this.#pendingIntent = undefined
-    if (!this.window.isDestroyed()) this.window.hide()
+    if (!this.#visible || this.#parent.isDestroyed()) {
+      this.#visible = false
+      return
+    }
+    this.#visible = false
+    this.#parent.contentView.removeChildView(this.view)
+  }
+
+  raise(): void {
+    if (!this.#visible || this.#parent.isDestroyed()) return
+    const { contentView } = this.#parent
+    contentView.removeChildView(this.view)
+    contentView.addChildView(this.view)
   }
 
   destroy(): void {
-    if (!this.window.isDestroyed()) this.window.destroy()
+    this.hide()
+    if (!this.view.webContents.isDestroyed()) this.view.webContents.close()
+    if (!this.#parent.isDestroyed()) this.#parent.contentView.removeChildView(this.view)
   }
 
   #reveal(intent: CommandBarIntent): void {
     this.#pendingIntent = undefined
-    this.#position()
-    this.window.show()
-    this.window.focus()
+    this.#layout()
+    this.#visible = true
+    this.raise()
+    this.view.webContents.focus()
     const event: CommandBarEvent = { type: 'show', intent }
-    this.window.webContents.send(IPC_CHANNELS.commandBarEvent, event)
+    this.view.webContents.send(IPC_CHANNELS.commandBarEvent, event)
   }
 
-  #position(): void {
-    if (this.window.isDestroyed()) return
-    const parentBounds = this.#parent.getBounds()
-    this.window.setPosition(
-      parentBounds.x + Math.round((parentBounds.width - WIDTH) / 2),
-      parentBounds.y + Math.round(parentBounds.height * 0.18)
-    )
+  #layout(): void {
+    if (this.#parent.isDestroyed()) return
+    const [contentWidth = 0, contentHeight = 0] = this.#parent.getContentSize()
+    const width = Math.min(WIDTH, contentWidth)
+    const height = Math.min(HEIGHT, contentHeight)
+    this.view.setBounds({
+      x: Math.round((contentWidth - width) / 2),
+      y: Math.round(contentHeight * TOP_RATIO),
+      width,
+      height
+    })
   }
 }

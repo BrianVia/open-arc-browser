@@ -34,9 +34,13 @@ async function createApplication(): Promise<void> {
   })
   engine = new EngineHost(window, initial, (command) => browserState?.dispatch(command))
   commandBar = new CommandBarHost(window)
-  teardownIpc = wireIpc({ shell: window, commandBar: commandBar.window }, browserState, (nextInsets) => {
-    insets = nextInsets
+  const syncEngine = (): void => {
     engine?.sync(browserState?.snapshot ?? initial, insets)
+    commandBar?.raise()
+  }
+  teardownIpc = wireIpc({ shell: window, commandBar }, browserState, (nextInsets) => {
+    insets = nextInsets
+    syncEngine()
   }, () => commandBar?.hide(), (decision) => engine?.answerPermission(decision.id, decision.allow, decision.remember), (query) => {
     if (query.type === 'close') engine?.closeFind()
     else engine?.findInPage(query.text, { forward: query.forward, findNext: query.findNext })
@@ -49,8 +53,8 @@ async function createApplication(): Promise<void> {
     toggleFindBar: () => engine?.toggleFindBar()
   })
   installApplicationMenu(accelerators)
-  browserState.subscribe((state) => engine?.sync(state, insets))
-  window.on('resize', () => engine?.sync(browserState?.snapshot ?? initial, insets))
+  browserState.subscribe(() => syncEngine())
+  window.on('resize', () => syncEngine())
   window.on('closed', () => {
     teardownIpc?.()
     engine?.destroy()

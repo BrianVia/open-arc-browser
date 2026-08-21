@@ -1,10 +1,10 @@
-import { BrowserWindow, ipcMain, shell } from 'electron'
+import { BrowserWindow, ipcMain, shell, type WebContents } from 'electron'
 import { IPC_CHANNELS, browserCommandSchema, commandBarRequestSchema, findQuerySchema, ipcCommandSchema, permissionDecisionSchema, type AppState, type FindQuery, type PermissionDecision } from '../shared'
 import type { BrowserState } from './state/store'
 
 export interface IpcWindows {
   shell: BrowserWindow
-  commandBar: BrowserWindow
+  commandBar: { readonly webContents: WebContents }
 }
 
 export function wireIpc(
@@ -43,8 +43,8 @@ export function wireIpc(
   }
   ipcMain.on(IPC_CHANNELS.command, onCommand)
 
-  const sendState = (window: BrowserWindow, snapshot: AppState): void => {
-    if (!window.isDestroyed()) window.webContents.send(IPC_CHANNELS.state, snapshot)
+  const sendState = (target: { readonly webContents: WebContents }, snapshot: AppState): void => {
+    if (!target.webContents.isDestroyed()) target.webContents.send(IPC_CHANNELS.state, snapshot)
   }
   const unsubscribe = state.subscribe((snapshot: AppState) => {
     sendState(windows.shell, snapshot)
