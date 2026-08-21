@@ -1,1 +1,23 @@
-<script lang="ts">import type {Snippet} from 'svelte';let{children,active=false,onclick}:{children:Snippet;active?:boolean;onclick?:()=>void}=$props();</script><button class:active {onclick}>{@render children()}</button><style>button{width:100%;height:30px;border:0;border-radius:7px;background:transparent;text-align:left;padding:0 9px;font-size:13px}button:hover{background:var(--hover)}.active{background:color-mix(in oklab,var(--accent) 14%,transparent);font-weight:600}</style>
+<script lang="ts">
+  import type { Snippet } from 'svelte'
+
+  let { active = false, children, onclick, onauxclick }: {
+    active?: boolean
+    children: Snippet
+    onclick?: (event: MouseEvent) => void
+    onauxclick?: (event: MouseEvent) => void
+  } = $props()
+</script>
+
+<div class:active role="button" tabindex="0" {onclick} {onauxclick} onkeydown={(event) => event.key === 'Enter' && onclick?.(event as unknown as MouseEvent)}>
+  {@render children()}
+</div>
+
+<style>
+  div {
+    min-height: 34px; display: flex; align-items: center; gap: 9px;
+    padding: 5px 8px; border-radius: 9px; color: var(--text); cursor: default;
+  }
+  div:hover { background: var(--hover); }
+  div.active { background: var(--active); }
+</style>

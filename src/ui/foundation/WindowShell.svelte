@@ -1,1 +1,24 @@
-<script lang="ts">import type{Snippet}from'svelte';let{sidebar,children,title='Aurora'}:{sidebar:Snippet;children:Snippet;title?:string}=$props();</script><div class="window"><header data-tauri-drag-region><div class="lights"><i></i><i></i><i></i></div>{title}</header><div class="body"><aside>{@render sidebar()}</aside><main>{@render children()}</main></div></div><style>.window{width:min(1100px,calc(100vw - 32px));height:min(700px,calc(100vh - 32px));overflow:hidden;border:1px solid var(--border);border-radius:16px;background:var(--surface);box-shadow:0 28px 70px rgb(0 0 0/.22)}header{height:44px;display:grid;place-items:center;border-bottom:1px solid var(--border);font-size:12px;font-weight:600;color:var(--muted);position:relative}.lights{position:absolute;left:14px;display:flex;gap:8px}.lights i{width:12px;height:12px;border-radius:50%;background:#ff5f57}.lights i:nth-child(2){background:#febc2e}.lights i:nth-child(3){background:#28c840}.body{display:grid;grid-template-columns:230px 1fr;height:calc(100% - 44px)}aside{padding:14px;border-right:1px solid var(--border);background:var(--sidebar)}main{overflow:auto}</style>
+<script lang="ts">
+  import Button from './Button.svelte'
+</script>
+
+<header>
+  <div class="brand">Open Arc</div>
+  <div class="controls">
+    <Button subtle title="Minimize" onclick={() => window.browser.command({ type: 'windowControl', action: 'minimize' })}>−</Button>
+    <Button subtle title="Maximize" onclick={() => window.browser.command({ type: 'windowControl', action: 'maximize' })}>□</Button>
+    <Button subtle title="Close" onclick={() => window.browser.command({ type: 'windowControl', action: 'close' })}>×</Button>
+  </div>
+</header>
+
+<style>
+  header {
+    position: fixed; inset: 0 0 auto 0; z-index: 2; height: 36px;
+    display: flex; align-items: center; justify-content: space-between;
+    padding-left: 12px; background: var(--shell); border-bottom: 1px solid var(--line);
+    -webkit-app-region: drag; user-select: none;
+  }
+  .brand { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: 0.02em; }
+  .controls { display: flex; align-items: center; height: 100%; -webkit-app-region: no-drag; }
+  .controls :global(button) { width: 38px; height: 100%; border-radius: 0; font-size: 12px; }
+</style>

@@ -1,2 +1,23 @@
-<script lang="ts">import type {Snippet} from 'svelte';let{children,primary=false,onclick}:{children:Snippet;primary?:boolean;onclick?:()=>void}=$props();</script>
-<button class:primary {onclick}>{@render children()}</button><style>button{height:32px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);padding:0 12px;font-size:13px;font-weight:550}button:hover{background:var(--hover)}.primary{background:var(--accent);color:white;border-color:var(--accent)}</style>
+<script lang="ts">
+  import type { Snippet } from 'svelte'
+
+  let { children, title, onclick, subtle = false }: {
+    children: Snippet
+    title?: string
+    onclick?: (event: MouseEvent) => void
+    subtle?: boolean
+  } = $props()
+</script>
+
+<button class:subtle {title} {onclick}>{@render children()}</button>
+
+<style>
+  button {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 28px; height: 28px; padding: 0 8px; border-radius: 8px;
+    background: var(--surface); cursor: default;
+  }
+  button:hover { background: var(--active); }
+  button.subtle { background: transparent; }
+  button.subtle:hover { background: var(--hover); }
+</style>
