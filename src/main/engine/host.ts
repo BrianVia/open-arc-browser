@@ -64,6 +64,7 @@ export class EngineHost {
   readonly #pendingPermissions = new Map<string, PendingPermission>()
   #findOpen = false
   #findContentsId: number | undefined
+  #lastActiveSignature = ''
   #state: AppState
 
   constructor(window: BrowserWindow, initialState: AppState, emit: (command: BrowserCommand) => void, dependencies: EngineDependencies = {}) {
@@ -83,11 +84,18 @@ export class EngineHost {
 
     const activeSpace = state.spaces.find((space) => space.id === state.activeSpaceId)
     const visibleIds = activeSpace?.split?.panes ?? (state.activeTabId[state.activeSpaceId] ? [state.activeTabId[state.activeSpaceId]] : [])
-    for (const record of this.#views.values()) this.#detach(record)
-
     const visibleTabs = visibleIds
       .map((id) => state.tabs.find((tab) => tab.id === id && tab.spaceId === state.activeSpaceId))
       .filter((tab): tab is Tab => tab !== undefined)
+
+    // Detach only what should no longer show; attached-and-still-visible
+    // views just get new bounds. Detaching everything per sync made window
+    // resize (which syncs per tick) visibly lag.
+    const visibleSet = new Set(visibleTabs.map((tab) => tab.id))
+    for (const record of this.#views.values()) {
+      if (record.attached && !visibleSet.has(record.tabId)) this.#detach(record)
+    }
+
     const bounds = this.#paneBounds(visibleTabs.length, insets)
     visibleTabs.forEach((tab, index) => {
       const record = this.#views.get(tab.id) ?? this.#create(tab)
@@ -103,7 +111,14 @@ export class EngineHost {
         void record.view.webContents.loadURL(tab.url)
       }
     })
-    for (const bridge of this.#bridges.values()) bridge.syncActiveTab(state)
+
+    // Report active-tab changes to the extension system only when they
+    // actually change — not on every geometry pass.
+    const activeSignature = `${state.activeSpaceId}:${state.activeTabId[state.activeSpaceId] ?? ''}`
+    if (activeSignature !== this.#lastActiveSignature) {
+      this.#lastActiveSignature = activeSignature
+      for (const bridge of this.#bridges.values()) bridge.syncActiveTab(state)
+    }
   }
 
   destroy(): void {
