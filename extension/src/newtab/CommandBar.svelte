@@ -138,11 +138,12 @@
 <style>
   :global(html), :global(body), :global(#app) { width: 100%; height: 100%; margin: 0; }
   :global(body) {
-    display: grid; place-items: center; align-items: start; padding-top: 18vh;
     background:
       radial-gradient(60% 50% at 50% 0%, color-mix(in srgb, #8b7cf6 9%, transparent), transparent),
       var(--shell);
   }
+  /* #app is the full-size box, so center the palette here, not on body. */
+  :global(#app) { display: grid; justify-items: center; align-content: start; padding-top: 18vh; }
   .palette {
     width: min(620px, calc(100vw - 48px)); overflow: hidden; border: 1px solid var(--line); border-radius: 12px;
     background:
