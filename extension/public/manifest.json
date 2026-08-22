@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Open Arc",
+  "version": "0.1.0",
+  "description": "Arc-style spaces, sidebar, and command bar on the local Chromium fork.",
+  "permissions": ["tabs", "tabGroups", "sidePanel", "storage", "favicon"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": {},
+  "side_panel": { "default_path": "sidebar.html" },
+  "chrome_url_overrides": { "newtab": "newtab.html" }
+}

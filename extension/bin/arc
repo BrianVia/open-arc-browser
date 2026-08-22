@@ -1,0 +1,26 @@
+#!/bin/sh
+# Launch the local Chromium fork with the built Open Arc extension loaded.
+set -e
+
+REPO="$(cd "$(dirname "$0")/../.." && pwd)"
+CHROME="${CHROME:-$HOME/Development/chromium/src/out/Default/chrome}"
+
+# Real sandbox via our built SUID helper; falls back to --no-sandbox with a
+# warning when the helper lost its root perms (rebuilds reset them:
+# sudo chown root:root <helper> && sudo chmod 4755 <helper>).
+SANDBOX="$(dirname "$CHROME")/chrome_sandbox"
+if [ -u "$SANDBOX" ]; then
+  export CHROME_DEVEL_SANDBOX="$SANDBOX"
+  EXTRA=""
+else
+  echo "warning: $SANDBOX is not setuid root; running --no-sandbox" >&2
+  EXTRA="--no-sandbox"
+fi
+
+exec "$CHROME" \
+  --user-data-dir="$HOME/.config/open-arc-fork" \
+  --load-extension="$REPO/extension/dist" \
+  --ozone-platform=wayland \
+  --no-first-run \
+  $EXTRA \
+  "$@"
